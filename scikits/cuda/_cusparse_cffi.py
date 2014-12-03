@@ -30,11 +30,11 @@ else:
     with open(cffi_file, 'r') as f:
         cffi_cdef = f.read()
 
-_ffi, _ffi_lib = ffi_init_cusparse(cffi_cdef)
+ffi, ffi_lib = ffi_init_cusparse(cffi_cdef)
 
 if not os.path.exists(python_wrapper_file):
     if not os.path.exists(func_defs_json):
-        generate_func_descriptions_json(_ffi_lib, json_file=func_defs_json)
+        generate_func_descriptions_json(ffi_lib, json_file=func_defs_json)
     generate_cusparse_python_wrappers(cffi_cdef,
                                       variable_defs_json=variable_defs_json,
                                       func_defs_json=func_defs_json,
@@ -48,9 +48,9 @@ class CUSPARSE_ERROR(Exception):
 # Use CUSPARSE_STATUS* definitions to dynamically create corresponding
 # exception classes and populate dictionary used to raise appropriate
 # exception in response to the corresponding CUSPARSE error code:
-CUSPARSE_STATUS_SUCCESS = _ffi_lib.CUSPARSE_STATUS_SUCCESS
+CUSPARSE_STATUS_SUCCESS = ffi_lib.CUSPARSE_STATUS_SUCCESS
 CUSPARSE_EXCEPTIONS = {-1: CUSPARSE_ERROR}
-for k, v in _ffi_lib.__dict__.iteritems():
+for k, v in ffi_lib.__dict__.iteritems():
     # Skip CUSPARSE_STATUS_SUCCESS:
     if re.match('CUSPARSE_STATUS.*', k) and v != CUSPARSE_STATUS_SUCCESS:
         CUSPARSE_EXCEPTIONS[v] = vars()[k] = type(k, (CUSPARSE_ERROR,), {})
@@ -58,7 +58,7 @@ for k, v in _ffi_lib.__dict__.iteritems():
 
 # Import various other enum values into module namespace:
 regex = 'CUSPARSE_(?!STATUS).*'
-for k, v in _ffi_lib.__dict__.iteritems():
+for k, v in ffi_lib.__dict__.iteritems():
     if re.match(regex, k):
         # print("k={}, v={}".format(k,v))
         vars()[k] = v
@@ -93,7 +93,9 @@ with open(python_wrapper_file) as f:
     exec(code)
 
 
-__all__ = [k for k, v in _ffi_lib.__dict__.iteritems()]
+__all__ = [k for k, v in ffi_lib.__dict__.iteritems()]
 __all__.append('CUSPARSE_ERROR')
 __all__.append('CUSPARSE_EXCEPTIONS')
 __all__.append('cusparseCheckStatus')
+__all__.append('ffi')
+__all__.append('ffi_lib')

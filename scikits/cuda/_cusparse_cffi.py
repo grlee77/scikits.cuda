@@ -8,7 +8,6 @@ import re
 from os.path import join as pjoin
 
 from _cusparse_cffi_autogen import (generate_cffi_cdef,
-                                    reformat_c_code,
                                     ffi_init_cusparse,
                                     generate_func_descriptions_json,
                                     generate_cusparse_python_wrappers)

@@ -72,3 +72,10 @@ if __name__ == "__main__":
         include_package_data = True,
         install_requires = install_requires,
         extras_require = extras_require)
+
+    try:
+        print("attempting to autogenerate cuSPARSE wrappers")
+        from scikits.cuda import cusparse
+    except Exception as e:
+        print("autogeneration failed")
+        raise(e)

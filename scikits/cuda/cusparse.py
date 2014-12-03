@@ -13,5 +13,6 @@ try:
 except Exception as e:
     estr = "autogenerattion and import of cuSPARSE wrappers failed\n"
     estr += ("Try setting the CUDA_ROOT environment variable to the base of"
-             "your CUDA installation")
+             "your CUDA installation.  The autogeneration script tries to find"
+             "the CUSPARSE header at CUDA_ROOT/include/cusparse_v2.h\n")
     raise ImportError(estr)

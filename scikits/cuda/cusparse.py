@@ -1,8 +1,11 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Dec  3 15:26:20 2014
+#!/usr/bin/env python
 
-@author: lee8rx
 """
+Python interface to cuSPARSE functions.
+
+Note: You may need to set the environment variable CUDA_ROOT to the base of
+your CUDA installation.
+"""
+
 # import low level cuSPARSE python wrappers and constants
 from ._cusparse_cffi import *

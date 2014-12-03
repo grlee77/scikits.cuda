@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 """
-Created on Tue Dec  2 12:16:24 2014
+Autogenerate Python interface to cuSPARSE functions.
 
-@author: lee8rx
 """
+
 import os
 import re
 from os.path import join as pjoin

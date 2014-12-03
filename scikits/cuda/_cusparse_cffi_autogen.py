@@ -1,10 +1,11 @@
-# -*- coding: utf-8 -*-
 """
-Created by Gregory Lee
+Support functions for autogenerating Python interface to the cuSPARSE library.
 
-Developed on linux for CUDA v6.5, but should support any version where
-cusparse_v2.h can be found in the CUDA_ROOT/include.  I think this file was
-introduced around CUDA toolkit v4.1
+"""
+
+"""
+Developed on linux for CUDA v6.5, but should support any version >4 where
+cusparse_v2.h can be found in the CUDA_ROOT/include.
 
 Set the environment variable CUDA_ROOT to the base of your CUDA installation
 
@@ -17,8 +18,6 @@ and csrgemm() may produce incorrect results when working with transpose
 (CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE) operations. These routines work
 correctly when the non-transpose (CUSPARSE_OPERATION_NON_TRANSPOSE) operation
 is selected. The bug has been fixed in the CUDA 7.0 release."
-
-
 """
 
 import os
@@ -37,7 +36,7 @@ base_dir = os.path.dirname(__file__)
 def ffi_init_cusparse(cffi_cdef):
     _ffi = cffi.FFI()
     _ffi.cdef(cffi_cdef)
-    
+
     # Get the address in a cdata pointer:
     __verify_scr = """
     #include <cusparse_v2.h>
@@ -48,176 +47,113 @@ def ffi_init_cusparse(cffi_cdef):
                            library_dirs=['/usr/local/cuda/lib64/'])
     return _ffi, _ffi_lib
 
-def which(program):
-    """ Search for a binary program on the system path 
-    this code from:  http://stackoverflow.com/questions/377017/test-if-executable-exists-in-python
-    
+
+def generate_cffi_cdef(
+        cuda_include_path=cuda_include_path, cffi_out_file=None):
+    """ generate the CUSPARSE FFI definition
+
     Parameters
     ----------
-    program : str
-        name of the executable to search for on the path
-    
+    cuda_include_path : str
+        CUDA include path
+    cffi_out_file : str, optional
+        if provided, write the definition out to a file
+
     Returns
     -------
-    path : str
-        path to the binary file corresponding to program
-        
+    cffi_cdef : str
+        function definitions for use with cffi.  e.g. input to FFI.verify()
+
     """
-    import os
-    def is_exe(fpath):
-        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
-
-    fpath, fname = os.path.split(program)
-    if fpath:
-        if is_exe(program):
-            return os.path.realpath(program)  #resolve symbolic links
-    else:
-        for path in os.environ["PATH"].split(os.pathsep):
-            path = path.strip('"')
-            exe_file = os.path.join(path, program)
-            if is_exe(exe_file):
-                return os.path.realpath(exe_file)  #resolve symbolic links
-
-    return None   
-    
-def generate_cffi_cdef(cuda_include_path=cuda_include_path, cffi_out_file=None):
     v2_header = os.path.join(cuda_include_path, 'cusparse_v2.h')
     if not os.path.exists(v2_header):
         raise ValueError("header file not found in expected location")
-    
-    with open(v2_header,'r') as f:
+
+    with open(v2_header, 'r') as f:
         cusparse_hdr = f.readlines()
-    
+
     # in newer versions cusparse_v2.h just points to cusparse.h
     for line in cusparse_hdr:
-        #if v2 header includes cusparse.h, read that one instead
+        # if v2 header includes cusparse.h, read that one instead
         if line.startswith('#include "cusparse.h"'):
             v2_header = os.path.join(cuda_include_path, 'cusparse.h')
-            with open(v2_header,'r') as f:
+            with open(v2_header, 'r') as f:
                 cusparse_hdr = f.readlines()
-    
+
     # skip lines leading up to first typedef
-    for idx,line in enumerate(cusparse_hdr):
+    for idx, line in enumerate(cusparse_hdr):
         if line.startswith('typedef'):
-            start_line=idx
+            start_line = idx
             break
-    
+
     # skip closing #if defined logic
     for idx, line in enumerate(cusparse_hdr[::-1]):
         if line.startswith('#if defined(__cplusplus)'):
-            end_line = -idx-1
+            end_line = -idx - 1
             break
-    
+
     # define other data types needed by FFI
     # ... will be filled in from cuComplex.h by the C compiler
     cffi_cdef = """
     typedef struct CUstream_st *cudaStream_t;
-    
+
     typedef struct float2 {
         ...;
     } float2;
     typedef float2 cuFloatComplex;
     typedef float2 cuComplex;
-    
+
     typedef struct double2 {
         ...;
     } double2;
     typedef double2 cuDoubleComplex;
-    
+
     typedef float cufftReal;
     typedef double cufftDoubleReal;
-    
+
     typedef cuComplex cufftComplex;
     typedef cuDoubleComplex cufftDoubleComplex;
-    
+
     /* definitions from cusparse header below this point */
     """
-    
+
     cffi_cdef += ''.join(cusparse_hdr[start_line:end_line])
-    
+
     if os.name == 'nt':  # Win
-        cffi_cdef=cffi_cdef.replace('CUSPARSEAPI','__stdcall')
+        cffi_cdef = cffi_cdef.replace('CUSPARSEAPI', '__stdcall')
     else:  # posix, etc
-        cffi_cdef=cffi_cdef.replace('CUSPARSEAPI','')
-    
+        cffi_cdef = cffi_cdef.replace('CUSPARSEAPI', '')
+
     if cffi_out_file is not None:
         # create specified output directory if it doesn't already exist
         out_dir = os.path.dirname(cffi_out_file)
         if out_dir and not os.path.exists(out_dir):
             os.makedirs(out_dir)
-        with open(cffi_out_file,'w') as f:
+        with open(cffi_out_file, 'w') as f:
             f.write(cffi_cdef)
 
     return cffi_cdef
 
-def reformat_c_code(c_file):
-    """ call astyle to auto indent the c code """
-    import subprocess
-    if not os.path.exists(c_file):
-        raise ValueError("specified input file doesn't exist")
-    astyle_cmd = which('astyle')
-    if astyle_cmd is None:
-        raise ValueError("cannot find astyle command on path")
-    subprocess.check_output('{} --mode=c {}'.format(astyle_cmd, c_file),
-                            shell=True)
-    with open(c_file, 'r') as f:
-        c_file_str = f.read()
-    return c_file_str
-
 # sourcefilename = _ffi.verifier.sourcefilename
 # modulefilename = _ffi.verifier.modulefilename
-
-def _find_breakpoint(line, break_pattern=', ', nmax=80):
-    locs = [m.start() for m in re.finditer(break_pattern, line)]
-    if len(locs) > 0:
-        break_loc = locs[np.where(
-            np.asarray(locs) < (nmax-len(break_pattern)))[0][-1]]
-        break_loc += len(break_pattern)
-    else:
-        break_loc = None
-    return locs, break_loc
-
-
-def _split_line(line, break_pattern=', ', nmax=80, pad_char='('):
-    if len(line) < nmax:
-        return line.rstrip() + '\n'
-    locs, break_loc = _find_breakpoint(line,
-                                       break_pattern=break_pattern,
-                                       nmax=nmax)
-    if break_loc is None:
-        return line.rstrip() + '\n'
-    if pad_char is not None:
-        npad = line.find(pad_char) + 1
-    else:
-        npad = 0
-
-    lines = []
-    lines.append(line[:break_loc].rstrip())
-    line = ' '*npad + line[break_loc:]
-    while (len(line) > nmax-1) and (break_loc is not None):
-        locs, break_loc = _find_breakpoint(line,
-                                           break_pattern=break_pattern,
-                                           nmax=nmax)
-        lines.append(line[:break_loc].rstrip())
-        line = ' '*npad + line[break_loc:]
-    lines.append(line.rstrip())
-    return '\n'.join(lines) + '\n'
-
-
-def build_func_sig(func_name, arg_dict):
-    if 'Create' in func_name:
-        # don't pass in any argument to creation functions
-        return "def %s():\n" % func_name
-    sig = "def %s(" % func_name
-    for k, v in arg_dict.iteritems():
-        sig += k + ", "
-    sig = sig[:-2] + "):\n"
-    # wrap to 2nd line if too long
-    return _split_line(sig, break_pattern=', ', nmax=79)
 
 
 def reindent(s, numSpaces=4, lstrip=True):
     """add indentation to a multiline string.
+
+    Parameters
+    ----------
+    s : str
+        string to reformat
+    numSpaces : str, optional
+        number of spaces to indent each line by
+    lstrip : bool, optional
+        if True, lstrip() prior to adding numSpaces
+
+    Returns
+    -------
+    s : str
+        reformatted str
     """
     s = s.split('\n')
     if lstrip:
@@ -233,7 +169,83 @@ def reindent(s, numSpaces=4, lstrip=True):
     return s
 
 
-def build_doc_str(arg_dict, func_description='', variable_descriptions={}):
+def _find_breakpoint(line, break_pattern=', ', nmax=80):
+    """ determine where to break the line """
+    locs = [m.start() for m in re.finditer(break_pattern, line)]
+    if len(locs) > 0:
+        break_loc = locs[np.where(
+            np.asarray(locs) < (nmax - len(break_pattern)))[0][-1]]
+        break_loc += len(break_pattern)
+    else:
+        break_loc = None
+    return locs, break_loc
+
+
+def _split_line(line, break_pattern=', ', nmax=80, pad_char='('):
+    """ split a line (repeatedly) until length < nmax chars.
+
+    split will occur at last occurence of break_pattern occuring before nmax
+    characters
+
+    subsequent lines will be indented until the first occurance of pad_char
+    in the initial line
+
+    Parameters
+    ----------
+    line : str
+        line to reformat
+    break_pattern : str, optional
+        break line only where this pattern occurs
+    nmax : int, optional
+        max number of characters to allow
+    pad_char : str, optional
+        auto-indent subsequent lines up to the first occurance of pad_char
+
+    Returns
+    -------
+    new_line : str
+        reformatted line
+    """
+    if len(line) < nmax:
+        return line.rstrip() + '\n'
+    locs, break_loc = _find_breakpoint(line,
+                                       break_pattern=break_pattern,
+                                       nmax=nmax)
+    if break_loc is None:
+        return line.rstrip() + '\n'
+    if pad_char is not None:
+        npad = line.find(pad_char) + 1
+    else:
+        npad = 0
+
+    lines = []
+    lines.append(line[:break_loc].rstrip())
+    line = ' ' * npad + line[break_loc:]
+    while (len(line) > nmax - 1) and (break_loc is not None):
+        locs, break_loc = _find_breakpoint(line,
+                                           break_pattern=break_pattern,
+                                           nmax=nmax)
+        lines.append(line[:break_loc].rstrip())
+        line = ' ' * npad + line[break_loc:]
+    lines.append(line.rstrip())
+    return '\n'.join(lines) + '\n'
+
+
+def _build_func_sig(func_name, arg_dict):
+    """ generate the python wrapper function signature line(s). """
+    if 'Create' in func_name:
+        # don't pass in any argument to creation functions
+        return "def %s():\n" % func_name
+    sig = "def %s(" % func_name
+    for k, v in arg_dict.iteritems():
+        sig += k + ", "
+    sig = sig[:-2] + "):\n"
+    # wrap to 2nd line if too long
+    return _split_line(sig, break_pattern=', ', nmax=79)
+
+
+def _build_doc_str(arg_dict, func_description='', variable_descriptions={}):
+    """ generate python wrapper docstring """
     docstr = '"""' + func_description + '\n'
     docstr += 'Parameters\n----------\n'
     for k, v in arg_dict.iteritems():
@@ -248,7 +260,13 @@ def build_doc_str(arg_dict, func_description='', variable_descriptions={}):
     return reindent(docstr, numSpaces=4, lstrip=False)
 
 
-def build_body(func_name, arg_dict, return_type):
+def _build_body(func_name, arg_dict, return_type):
+    """ generate python_wrapper function body
+
+    Note: this code is highly specific to the particulars of the cuSPARSE
+    library
+
+    """
     body = ""
     arg_list = ""
 
@@ -283,7 +301,7 @@ def build_body(func_name, arg_dict, return_type):
 
         # convert inputs to appropriate type for the FFI
         if is_output_scalar:
-            #for scalar outputs make a new pointer
+            # for scalar outputs make a new pointer
             body += "%s = _ffi.cast('%s', %s)\n" % (k, v, k)
         elif is_gpu_array:
             # pass pointer to GPU array data (use either .ptr or .gpudata)
@@ -299,7 +317,8 @@ def build_body(func_name, arg_dict, return_type):
             if is_complex:
                 # complex case is a bit tricky
                 body += "%s_ffi = _ffi.new('%s')\n" % (k, v)
-                body += "_ffi.buffer(%s_ffi)[:] = np.complex64(%s).tostring()\n" % (k, k)
+                body += "_ffi.buffer(%s_ffi)[:] = \
+                    np.complex64(%s).tostring()\n" % (k, k)
             else:
                 body += "%s = _ffi.new('%s', %s)\n" % (k, v, k)
         elif is_ptr:
@@ -319,7 +338,7 @@ def build_body(func_name, arg_dict, return_type):
             arg_list += "%s_ffi, " % k
         else:
             arg_list += "%s, " % k
-            
+
         # build return types string
         if is_output_scalar:
             if return_str == '':
@@ -335,40 +354,39 @@ def build_body(func_name, arg_dict, return_type):
     if is_return:
         if is_getter or is_creator:
             body += "return %s[0]\n" % last_key
-#        if func_name == 'cusparseCreate':
-#            # body += "return struct.Struct('L').unpack(_ffi.buffer(handle))[0]\n"
-#            body += "return handle[0]\n"
-#        elif func_name == 'cusparseCreateMatDescr':
-#            body += "return descrA[0]\n"
-#        elif func_name in ['cusparseCreateSolveAnalysisInfo',
-#                           'cusparseCreateCsrsv2Info',
-#                           'cusparseCreateCsric02Info',
-#                           'cusparseCreateBsric02Info',
-#                           'cusparseCreateCsrilu02Info',
-#                           'cusparseCreateBsrilu02Info',
-#                           'cusparseCreateBsrsv2Info',
-#                           'cusparseCreateBsrsm2Info']:
-#            body += "return info[0]\n"
-#        elif func_name == 'cusparseCreateHybMat':
-#            body += "return hybA[0]\n"
-#        elif is_getter:
-#            body += "return %s[0]" % v
         else:
             body += "#TODO: return the appropriate result"
     body += '\n\n'
     return reindent(body, numSpaces=4, lstrip=False)
 
 
-def func_str(func_name, arg_dict, return_type, 
+def _func_str(func_name, arg_dict, return_type,
              variable_descriptions={}, func_description=''):
-    fstr = build_func_sig(func_name, arg_dict)
-    fstr += build_doc_str(arg_dict, func_description=func_description,
+    """ build a single python wrapper """
+    fstr = _build_func_sig(func_name, arg_dict)
+    fstr += _build_doc_str(arg_dict, func_description=func_description,
                           variable_descriptions=variable_descriptions)
-    fstr += build_body(func_name, arg_dict, return_type)
+    fstr += _build_body(func_name, arg_dict, return_type)
     return fstr
 
 
 def build_python_func(cdef, variable_descriptions={}, func_descriptions={}):
+    """ wrap a single python function corresponding to the given cdef C
+    function string.
+
+    Parameters
+    ----------
+    cdef : str
+        single line string containing a C function definition
+    variable_descriptions : dict
+        dictionary of variable descriptions for the docstring
+    func_descriptions : dict
+        dictionary of function descriptions for the docstring
+
+    Returns
+    -------
+    str corresponding to the python_wrapper
+    """
     cdef_regex = "(\w*)\s*(\w*)\s*\((.*)\).*"
     p = re.compile(cdef_regex)
     match = p.search(cdef)
@@ -395,34 +413,37 @@ def build_python_func(cdef, variable_descriptions={}, func_descriptions={}):
         arg_dict[key] = val
 
     func_description = func_descriptions.get(func_name, '')
-    return func_str(func_name, arg_dict, return_type,
+    return _func_str(func_name, arg_dict, return_type,
                     variable_descriptions=variable_descriptions,
                     func_description=func_description)
 
 
-
-#with open('cusparse_variable_descriptions.json', 'w') as fid:
+# with open('cusparse_variable_descriptions.json', 'w') as fid:
 #    json.dump(variable_descriptions, fid, sort_keys=True, indent=4)
 
 def get_variable_descriptions(var_def_json):
+    """ load variable description dictionary from .json file"""
     with open(var_def_json, 'r') as fid:
         variable_descriptions = json.load(fid)
     for k, v in variable_descriptions.iteritems():
         variable_descriptions[k] = _split_line(v, break_pattern=' ', nmax=72,
                                                pad_char=None)
     return variable_descriptions
-    
+
+
 def get_function_descriptions(func_def_json):
+    """ load function description dictionary from .json file"""
     with open(func_def_json, 'r') as fid:
         func_descriptions = json.load(fid)
     for k, v in func_descriptions.iteritems():
         func_descriptions[k] = _split_line(v, break_pattern=' ', nmax=72,
-                                               pad_char=None)
-    return func_descriptions    
+                                           pad_char=None)
+    return func_descriptions
 
-def generate_func_descriptions_json(_ffi_lib, json_file):    
-    func_descriptions={}
-    for t in ['S','D','C','Z']:
+
+def generate_func_descriptions_json(_ffi_lib, json_file):
+    func_descriptions = {}
+    for t in ['S', 'D', 'C', 'Z']:
         func_descriptions['cusparse' + t + 'axpyi'] = 'scalar multiply and add: y = y + alpha * x'
         func_descriptions['cusparse' + t + 'doti'] = 'dot product: result = y.T * x'
         func_descriptions['cusparse' + t + 'dotci'] = 'complex conjugate dot product: result = y.H * x'
@@ -537,20 +558,37 @@ def generate_func_descriptions_json(_ffi_lib, json_file):
         func_descriptions[func] = "Set cuSPARSE {}.".format(obj)
 
     # prune any of the above that aren't in _ffi_lib:
-    func_descriptions = dict((k, v) for k, v in func_descriptions.iteritems() if k in _ffi_lib.__dict__)
-    
+    func_descriptions = dict(
+        (k, v) for k, v in func_descriptions.iteritems(
+            ) if k in _ffi_lib.__dict__)
+
     with open(json_file, 'w') as fid:
         json.dump(func_descriptions, fid, sort_keys=True, indent=4)
-        
 
-def generate_cusparse_python_wrappers(cffi_cdef=None, variable_defs_json={},
-                                      func_defs_json={},
+
+def generate_cusparse_python_wrappers(cffi_cdef=None, variable_defs_json='',
+                                      func_defs_json='',
                                       python_wrapper_file=None):
-    if os.path.isfile(cffi_cdef):
-        with open(cffi_out_file, 'r') as f:
-            cffi_cdef_list = f.readlines()
-    else:
-        cffi_cdef_list = cffi_cdef.split('\n')
+    """ generate python wrappers for all functions within cffi_cdef.
+
+    Parameters
+    ----------
+    cffi_cdef : str
+        cffi definition string as generated by `generate_cffi_cdef`
+    variable_defs_json : str, optional
+        filename of .json file containing dictionary of variable descriptions
+    func_defs_json : str, optional
+        filename of .json file containing dictionary of function descriptions
+    python_wrapper_file : str, optional
+        file to output the generated python wrappers to
+
+    Returns
+    -------
+    python_wrappers : str
+        string containing all of the python wrappers
+
+    """
+    cffi_cdef_list = cffi_cdef.split('\n')
 
     # find lines containing a function definition
     func_def_lines = []
@@ -563,13 +601,13 @@ def generate_cusparse_python_wrappers(cffi_cdef=None, variable_defs_json={},
     cdef_list = []
     for i in range(len(func_def_lines)):
         loc1 = func_def_lines[i]
-        if i < n_funcs-1:
-            loc2 = func_def_lines[i+1]
+        if i < n_funcs - 1:
+            loc2 = func_def_lines[i + 1]
             cdef = ' '.join([l.strip() for l in cffi_cdef_list[loc1:loc2]])
         else:
             cdef = ' '.join([l.strip() for l in cffi_cdef_list[loc1:]])
         # strip any remaining comments after the semicolon
-        cdef = cdef[:cdef.find(';')+1]
+        cdef = cdef[:cdef.find(';') + 1]
         cdef_list.append(cdef)
 
     # read function and variable definition strings to use when building the

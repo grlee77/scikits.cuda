@@ -34,18 +34,18 @@ base_dir = os.path.dirname(__file__)
 
 
 def ffi_init_cusparse(cffi_cdef):
-    _ffi = cffi.FFI()
-    _ffi.cdef(cffi_cdef)
+    ffi = cffi.FFI()
+    ffi.cdef(cffi_cdef)
 
     # Get the address in a cdata pointer:
     __verify_scr = """
     #include <cusparse_v2.h>
     #include <driver_types.h>
     """
-    _ffi_lib = _ffi.verify(__verify_scr, libraries=['cusparse'],
+    ffi_lib = ffi.verify(__verify_scr, libraries=['cusparse'],
                            include_dirs=['/usr/local/cuda/include'],
                            library_dirs=['/usr/local/cuda/lib64/'])
-    return _ffi, _ffi_lib
+    return ffi, ffi_lib
 
 
 def generate_cffi_cdef(
@@ -134,8 +134,8 @@ def generate_cffi_cdef(
 
     return cffi_cdef
 
-# sourcefilename = _ffi.verifier.sourcefilename
-# modulefilename = _ffi.verifier.modulefilename
+# sourcefilename = ffi.verifier.sourcefilename
+# modulefilename = ffi.verifier.modulefilename
 
 
 def reindent(s, numSpaces=4, lstrip=True):
@@ -302,40 +302,40 @@ def _build_body(func_name, arg_dict, return_type):
         # convert inputs to appropriate type for the FFI
         if is_output_scalar:
             # for scalar outputs make a new pointer
-            body += "%s = _ffi.cast('%s', %s)\n" % (k, v, k)
+            body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
         elif is_gpu_array:
             # pass pointer to GPU array data (use either .ptr or .gpudata)
-            body += "%s = _ffi.cast('%s', %s.ptr)\n" % (k, v, k)
+            body += "%s = ffi.cast('%s', %s.ptr)\n" % (k, v, k)
         elif is_cusparse_ptr:
             # generate custom cusparse type
             if is_creator:
-                body += "%s = _ffi.new('%s')\n" % (k, v)
+                body += "%s = ffi.new('%s')\n" % (k, v)
             elif is_getter and k != 'handle':
-                body += "%s = _ffi.new('%s')\n" % (k, v)
+                body += "%s = ffi.new('%s')\n" % (k, v)
         elif is_ptr and is_scalar:
             # create new pointer, with value initialized to scalar
             if is_complex:
                 # complex case is a bit tricky
-                body += "%s_ffi = _ffi.new('%s')\n" % (k, v)
-                body += "_ffi.buffer(%s_ffi)[:] = \
+                body += "%sffi = ffi.new('%s')\n" % (k, v)
+                body += "ffi.buffer(%sffi)[:] = \
                     np.complex64(%s).tostring()\n" % (k, k)
             else:
-                body += "%s = _ffi.new('%s', %s)\n" % (k, v, k)
+                body += "%s = ffi.new('%s', %s)\n" % (k, v, k)
         elif is_ptr:
             # case pointer to appropriate type
-            body += "%s = _ffi.cast('%s', %s)\n" % (k, v, k)
+            body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
         elif is_cusparse_type:
             # cast to the custom cusparse type
-            body += "%s = _ffi.cast('%s', %s)\n" % (k, v, k)
+            body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
         else:
             # don't need cast for plain int, float, etc
             pass
-            # body += "%s = _ffi.cast('%s', %s)\n" % (k, v, k)
+            # body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
 
         # build the list of arguments to pass to the API
         if is_ptr and is_scalar and is_complex:
             # take into account modified argument name for complex scalars
-            arg_list += "%s_ffi, " % k
+            arg_list += "%sffi, " % k
         else:
             arg_list += "%s, " % k
 
@@ -348,7 +348,7 @@ def _build_body(func_name, arg_dict, return_type):
 
     last_key = k
     arg_list = arg_list[:-2]
-    call_str = "status = _ffi_lib.%s(%s)\n" % (func_name, arg_list)
+    call_str = "status = ffi_lib.%s(%s)\n" % (func_name, arg_list)
     body += _split_line(call_str, break_pattern=', ', nmax=76)
     body += "cusparseCheckStatus(status)\n"
     if is_return:
@@ -441,7 +441,7 @@ def get_function_descriptions(func_def_json):
     return func_descriptions
 
 
-def generate_func_descriptions_json(_ffi_lib, json_file):
+def generate_func_descriptions_json(ffi_lib, json_file):
     func_descriptions = {}
     for t in ['S', 'D', 'C', 'Z']:
         func_descriptions['cusparse' + t + 'axpyi'] = 'scalar multiply and add: y = y + alpha * x'
@@ -533,34 +533,34 @@ def generate_func_descriptions_json(_ffi_lib, json_file):
     func_descriptions['cusparseXcsric02_zeroPivot'] = 'return numerical zero location for csric02'
     func_descriptions['cusparseXbsrsm2_zeroPivot'] = 'return numerical zero location for bsrsm2'
 
-    create_funcs = [cdef for cdef in _ffi_lib.__dict__ if 'Create' in cdef]
+    create_funcs = [cdef for cdef in ffi_lib.__dict__ if 'Create' in cdef]
     for func in create_funcs:
         tmp, obj = func.split('Create')
         if obj:
             func_descriptions[func] = "Create cuSPARSE {} structure.".format(obj)
         else:
             func_descriptions[func] = "Create cuSPARSE context."
-    destroy_funcs = [cdef for cdef in _ffi_lib.__dict__ if 'Destroy' in cdef]
+    destroy_funcs = [cdef for cdef in ffi_lib.__dict__ if 'Destroy' in cdef]
     for func in destroy_funcs:
         tmp, obj = func.split('Destroy')
         if obj:
             func_descriptions[func] = "Destroy cuSPARSE {} structure.".format(obj)
         else:
             func_descriptions[func] = "Destroy cuSPARSE context."
-    get_funcs = [cdef for cdef in _ffi_lib.__dict__ if 'Get' in cdef]
+    get_funcs = [cdef for cdef in ffi_lib.__dict__ if 'Get' in cdef]
     for func in get_funcs:
         tmp, obj = func.split('Get')
         func_descriptions[func] = "Get cuSPARSE {}.".format(obj)
 
-    set_funcs = [cdef for cdef in _ffi_lib.__dict__ if 'Set' in cdef]
+    set_funcs = [cdef for cdef in ffi_lib.__dict__ if 'Set' in cdef]
     for func in set_funcs:
         tmp, obj = func.split('Set')
         func_descriptions[func] = "Set cuSPARSE {}.".format(obj)
 
-    # prune any of the above that aren't in _ffi_lib:
+    # prune any of the above that aren't in ffi_lib:
     func_descriptions = dict(
         (k, v) for k, v in func_descriptions.iteritems(
-            ) if k in _ffi_lib.__dict__)
+            ) if k in ffi_lib.__dict__)
 
     with open(json_file, 'w') as fid:
         json.dump(func_descriptions, fid, sort_keys=True, indent=4)

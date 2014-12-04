@@ -231,13 +231,24 @@ def _split_line(line, break_pattern=', ', nmax=80, pad_char='('):
     return '\n'.join(lines) + '\n'
 
 
-def _build_func_sig(func_name, arg_dict):
+def _build_func_sig(func_name, arg_dict, return_type):
     """ generate the python wrapper function signature line(s). """
+
     if 'Create' in func_name:
         # don't pass in any argument to creation functions
         return "def %s():\n" % func_name
+
+    if ('Get' in func_name) and (return_type == 'cusparseStatus_t') and \
+        len(arg_dict) == 2:
+        basic_getter = True
+    else:
+        basic_getter = False
+
     sig = "def %s(" % func_name
     for k, v in arg_dict.iteritems():
+        is_ptr = '*' in v
+        if is_ptr and basic_getter:
+            continue
         sig += k + ", "
     sig = sig[:-2] + "):\n"
     # wrap to 2nd line if too long
@@ -277,14 +288,21 @@ def _build_body(func_name, arg_dict, return_type):
 
     is_creator = 'cusparseCreate' in func_name
     is_getter = 'cusparseGet' in func_name
-    if return_type == 'cusparseStatus_t' and not is_creator:
+
+    if return_type == 'cusparseStatus_t' and not (is_creator or is_getter):
         is_return = False
     else:
         is_return = True
 
+    # else:
     return_str = ''
     for k, v in arg_dict.iteritems():
-        # set some flags based on the name/type of the argument
+
+        """
+        set some flags based on the name/type of the argument
+        will use these flags to determine whether and how to call ffi.new or
+        ffi.cast on each variable
+        """
         is_ptr = '*' in v
         is_cusparse_type = '_t' in v
         is_cusparse_ptr = is_ptr and is_cusparse_type
@@ -293,29 +311,36 @@ def _build_body(func_name, arg_dict, return_type):
             is_scalar = True
         else:
             is_scalar = False
-        is_gpu_array = is_ptr and (not is_cusparse_ptr) and (not is_scalar)
+        if is_getter:
+            is_gpu_array = False
+        else:
+            is_gpu_array = is_ptr and (not is_cusparse_ptr) and (not is_scalar)
         if 'Complex' in v:
             is_complex = True
         else:
             is_complex = False
 
-        # convert inputs to appropriate type for the FFI
+        # convert variable to appropriate type for the FFI
         if is_output_scalar:
             # for scalar outputs make a new pointer
             body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
+        elif is_getter and is_ptr and (return_type == 'cusparseStatus_t'):
+            # any pointers in cusparseGet* are new outputs to be created
+            body += "%s = ffi.new('%s')\n" % (k, v)
         elif is_gpu_array:
             # pass pointer to GPU array data (use either .ptr or .gpudata)
             body += "%s = ffi.cast('%s', %s.ptr)\n" % (k, v, k)
         elif is_cusparse_ptr:
-            # generate custom cusparse type
             if is_creator:
+                # generate custom cusparse type
                 body += "%s = ffi.new('%s')\n" % (k, v)
-            elif is_getter and k != 'handle':
-                body += "%s = ffi.new('%s')\n" % (k, v)
+            else:
+                # cast to the custom cusparse type
+                body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
         elif is_ptr and is_scalar:
             # create new pointer, with value initialized to scalar
             if is_complex:
-                # complex case is a bit tricky
+                # complex case is a bit tricky.  requires ffi.buffer
                 body += "%sffi = ffi.new('%s')\n" % (k, v)
                 if 'cusparseC' in func_name:
                     body += "ffi.buffer(%sffi)[:] = \
@@ -326,15 +351,11 @@ def _build_body(func_name, arg_dict, return_type):
             else:
                 body += "%s = ffi.new('%s', %s)\n" % (k, v, k)
         elif is_ptr:
-            # case pointer to appropriate type
-            body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
-        elif is_cusparse_type:
-            # cast to the custom cusparse type
+            # case non-scalar pointer to appropriate type
             body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
         else:
-            # don't need cast for plain int, float, etc
+            # don't need explicit cast for plain int, float, etc
             pass
-            # body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
 
         # build the list of arguments to pass to the API
         if is_ptr and is_scalar and is_complex:
@@ -343,23 +364,22 @@ def _build_body(func_name, arg_dict, return_type):
         else:
             arg_list += "%s, " % k
 
-        # build return types string
-        if is_output_scalar:
-            if return_str == '':
-                return_str = 'return %s[0]' % k
-            else:
-                return_str += ', %s[0]' % k
-
+    # add the function call and optionally return the result
     last_key = k
-    arg_list = arg_list[:-2]
-    call_str = "status = ffi_lib.%s(%s)\n" % (func_name, arg_list)
-    body += _split_line(call_str, break_pattern=', ', nmax=76)
-    body += "cusparseCheckStatus(status)\n"
-    if is_return:
-        if is_getter or is_creator:
-            body += "return %s[0]\n" % last_key
-        else:
-            body += "#TODO: return the appropriate result"
+    arg_list = arg_list[:-2]  # remove trailing ", "
+    if is_getter and return_type != 'cusparseStatus_t':
+        body += "return ffi_lib.%s(%s)\n" % (func_name, arg_list)
+    else:
+        # check cusparseStatus_t state before returning
+        call_str = "status = ffi_lib.%s(%s)\n" % (func_name, arg_list)
+        body += _split_line(call_str, break_pattern=', ', nmax=76)
+        body += "cusparseCheckStatus(status)\n"
+        if is_return:
+            # len(arg_dict) == 2) is to avoid return for cusparseGetLevelInfo
+            if is_creator or (is_getter and (len(arg_dict) == 2)):
+                body += "return %s[0]\n" % last_key
+            else:
+                body += "#TODO: return the appropriate result"
     body += '\n\n'
     return reindent(body, numSpaces=4, lstrip=False)
 
@@ -367,7 +387,7 @@ def _build_body(func_name, arg_dict, return_type):
 def _func_str(func_name, arg_dict, return_type,
              variable_descriptions={}, func_description=''):
     """ build a single python wrapper """
-    fstr = _build_func_sig(func_name, arg_dict)
+    fstr = _build_func_sig(func_name, arg_dict, return_type)
     fstr += _build_doc_str(arg_dict, func_description=func_description,
                           variable_descriptions=variable_descriptions)
     fstr += _build_body(func_name, arg_dict, return_type)

@@ -21,6 +21,8 @@ variable_defs_json = pjoin(base_dir, 'cusparse_variable_descriptions.json')
 func_defs_json = pjoin(base_dir, 'cusparse_func_descriptions.json')
 
 if not os.path.exists(cffi_file):
+    print("first import of cusparse:  cffi interface file being created."
+          "This may take several seconds")
     cffi_cdef = generate_cffi_cdef(cffi_out_file=cffi_file)
 else:
     with open(cffi_file, 'r') as f:
@@ -29,6 +31,7 @@ else:
 ffi, ffi_lib = ffi_init_cusparse(cffi_cdef)
 
 if not os.path.exists(python_wrapper_file):
+    print("first import of cusparse:  python wrappers being created.")
     if not os.path.exists(func_defs_json):
         generate_func_descriptions_json(ffi_lib, json_file=func_defs_json)
     generate_cusparse_python_wrappers(cffi_cdef,

@@ -5,6 +5,8 @@ Autogenerate Python interface to cuSPARSE functions.
 
 import os
 import re
+import numpy as np
+
 from os.path import join as pjoin
 
 from _cusparse_cffi_autogen import (generate_cffi_cdef,
@@ -20,12 +22,6 @@ func_defs_json = pjoin(base_dir, 'cusparse_func_descriptions.json')
 
 if not os.path.exists(cffi_file):
     cffi_cdef = generate_cffi_cdef(cffi_out_file=cffi_file)
-    # auto_style to get more uniform indentation if astyle on path
-    try:
-        cffi_cdef = reformat_c_code(cffi_file)
-    except Exception:
-        # add warning?
-        pass
 else:
     with open(cffi_file, 'r') as f:
         cffi_cdef = f.read()

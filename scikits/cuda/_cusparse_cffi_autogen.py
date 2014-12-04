@@ -317,8 +317,12 @@ def _build_body(func_name, arg_dict, return_type):
             if is_complex:
                 # complex case is a bit tricky
                 body += "%sffi = ffi.new('%s')\n" % (k, v)
-                body += "ffi.buffer(%sffi)[:] = \
-                    np.complex64(%s).tostring()\n" % (k, k)
+                if 'cusparseC' in func_name:
+                    body += "ffi.buffer(%sffi)[:] = \
+                        np.complex64(%s).tostring()\n" % (k, k)
+                elif 'cusparseZ' in func_name:
+                    body += "ffi.buffer(%sffi)[:] = \
+                        np.complex128(%s).tostring()\n" % (k, k)
             else:
                 body += "%s = ffi.new('%s', %s)\n" % (k, v, k)
         elif is_ptr:

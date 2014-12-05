@@ -144,8 +144,6 @@ def csr2dense(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, A=None,
         for arr in [csrValA, csrRowPtrA, csrColIndA]:
             if not isinstance(arr, pycuda.gpuarray.GPUArray):
                 raise ValueError("csr* inputs must be a pyCUDA gpuarrays")
-        if (csrValA.size != m) or (csrColIndA.size != m):
-            raise ValueError("A: inconsistent size")
         if (csrRowPtrA.size != m + 1):
             raise ValueError("A: inconsistent size")
 
@@ -154,7 +152,7 @@ def csr2dense(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, A=None,
     assert lda >= m
 
     dtype = csrValA.dtype
-    A = gpuarray.to_gpu(np.zeros((m, n), dtype=dtype))
+    A = gpuarray.to_gpu(np.zeros((m, n), dtype=dtype, order='F'))
 
     if dtype == np.float32:
         fn = cusparseScsr2dense
@@ -742,7 +740,6 @@ class CSR(object):
         self.data = csrVal
         self.indices = csrColInd
         self.indptr = csrRowPtr
-
         # properties
         self.__matrix_type = None
         self.__index_base = None
@@ -864,7 +861,7 @@ class CSR(object):
 
         # try moving list or numpy array to GPU
         if not isinstance(x, pycuda.gpuarray.GPUArray):
-            x = np.atleast_1d(x).astype(self.dtype)
+            x = np.atleast_1d(x)  # .astype(self.dtype)
             x = gpuarray.to_gpu(x)
 
         y = csrmv(self.handle, self.descr, self.Val, self.RowPtr,
@@ -884,7 +881,7 @@ class CSR(object):
 
         # try moving list or numpy array to GPU
         if not isinstance(B, pycuda.gpuarray.GPUArray):
-            B = np.atleast_2d(B).astype(self.dtype)
+            B = np.atleast_2d(B)  # .astype(self.dtype)
             B = gpuarray.to_gpu(B)
 
         n = B.shape[1]
@@ -907,7 +904,7 @@ class CSR(object):
 
         # try moving list or numpy array to GPU
         if not isinstance(B, pycuda.gpuarray.GPUArray):
-            B = np.atleast_2d(B).astype(self.dtype)
+            B = np.atleast_2d(B)  # .astype(self.dtype)
             B = gpuarray.to_gpu(B)
 
         if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
@@ -924,6 +921,56 @@ class CSR(object):
             return C.get()
         else:
             return C
+
+    def geam(self, B, alpha=1.0, beta=1.0, check_inputs=True):
+        """ returns dense gpuarray C """
+        m, n = self.shape
+
+        if not isinstance(B, CSR):
+            # try converting B to cuSPARSE CSR
+            B = CSR.to_CSR(B, handle=self.handle)
+
+        if self.shape != B.shape:
+            raise ValueError("Incompatible shapes")
+
+        descrC, ValC, RowPtrC, ColIndC = csrgeam(
+            handle=self.handle, m=m, n=n, descrA=self.descr, csrValA=self.Val,
+            csrRowPtrA=self.RowPtr, csrColIndA=self.ColInd, descrB=B.descr,
+            csrValB=B.Val, csrRowPtrB=B.RowPtr, csrColIndB=B.ColInd,
+            alpha=alpha, beta=beta, nnzA=self.nnz, nnzB=B.nnz,
+            check_inputs=True)
+
+        C = CSR(self.handle, descr=descrC, csrVal=ValC, csrRowPtr=RowPtrC,
+                csrColInd=ColIndC, shape=self.shape)
+        return C
+
+    def gemm(self, B, transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
+             transB=CUSPARSE_OPERATION_NON_TRANSPOSE, check_inputs=True):
+        """ returns dense gpuarray C """
+        if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
+            m, k = self.shape
+        else:
+            k, m = self.shape
+
+        if not isinstance(B, CSR):
+            # try converting B to cuSPARSE CSR
+            B = CSR.to_CSR(B, handle=self.handle)
+
+        if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
+            n = B.shape[1]
+        else:
+            n = B.shape[0]
+
+        descrC, ValC, RowPtrC, ColIndC = csrgemm(
+            handle=self.handle, m=m, n=n, k=k, descrA=self.descr,
+            csrValA=self.Val, csrRowPtrA=self.RowPtr, csrColIndA=self.ColInd,
+            descrB=B.descr, csrValB=B.Val, csrRowPtrB=B.RowPtr,
+            csrColIndB=B.ColInd, nnzA=self.nnz, nnzB=B.nnz, transA=transA,
+            transB=transB, check_inputs=True)
+
+        C = CSR(self.handle, descr=descrC, csrVal=ValC, csrRowPtr=RowPtrC,
+                csrColInd=ColIndC, shape=(m, n))
+        return C
 
     def __del__(self):
         # delete the matrix description object

@@ -123,17 +123,18 @@ def test_dense_nnz():
 
 
 def test_dense2csr_csr2dense():
-    m = 100
-    A = np.eye(m)
+    A = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
+    m, n = A.shape
     for dtype in cusparse_dtypes:
         A = A.astype(dtype)
+        A_csr_scipy = scipy.sparse.csr_matrix(A)
         (handle, descrA, csrValA, csrRowPtrA, csrColIndA) = dense2csr(A)
         try:
-            assert_equal(csrValA.get(), np.ones((m,)))
-            assert_equal(csrRowPtrA.get(), np.arange(m+1))
-            assert_equal(csrColIndA.get(), np.arange(m))
+            assert_equal(csrValA.get(), A_csr_scipy.data)
+            assert_equal(csrRowPtrA.get(), A_csr_scipy.indptr)
+            assert_equal(csrColIndA.get(), A_csr_scipy.indices)
 
-            A_dense = csr2dense(handle, m, m, descrA, csrValA, csrRowPtrA,
+            A_dense = csr2dense(handle, m, n, descrA, csrValA, csrRowPtrA,
                                 csrColIndA)
             assert_equal(A, A_dense.get())
             # release handle, descrA that were generated within dense2csr
@@ -562,7 +563,8 @@ def test_csrgemm():
         cusparseDestroyMatDescr(descrB)
 
 
-    n=64
+def test_CSR_construction():
+    n = 64
     h = cusparseCreate()
     try:
         for dtype in cusparse_dtypes:
@@ -730,7 +732,7 @@ def test_CSR_mm():
         C = A_CSR.mm(B)
         assert_almost_equal(C.get(), np.dot(A, B_cpu))
         # transpose will be the same for this matrix
-        C = A_CSR.mm(B_cpu, transA=CUSPARSE_OPERATION_TRANSPOSE)
+        C = A_CSR.mm(B_cpu.astype(dtype), transA=CUSPARSE_OPERATION_TRANSPOSE)
         assert_almost_equal(C.get(), np.dot(A.T, B_cpu))
 
         alpha = 5.0
@@ -790,5 +792,54 @@ def test_CSR_mm2():
                                   beta=beta, C=C, to_cpu=True)
                     assert_almost_equal(C, (1.0+beta)*expected_result)
 
+    finally:
+        cusparseDestroy(h)
+
+
+def test_CSR_geam():
+    A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
+    B_cpu = np.asarray([[0, 1, 0], [0, 0, 1], [0, 0, 0], [0, 0, 0]])
+
+    h = cusparseCreate()
+    alpha = 0.3
+    beta = 5.0
+
+    try:
+        for dtype in cusparse_dtypes:
+            A_CSR = CSR.to_CSR(A_cpu.astype(dtype), h)
+            B_CSR = CSR.to_CSR(B_cpu.astype(dtype), h)
+            C_CSR = A_CSR.geam(B_CSR, alpha=alpha, beta=beta)
+
+            # compute on CPU with numpy and compare
+            C_cpu = alpha*A_cpu + beta*B_cpu
+            assert_almost_equal(C_CSR.todense(to_cpu=True), C_cpu)
+    finally:
+        cusparseDestroy(h)
+
+
+def test_CSR_gemm():
+    A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
+
+    h = cusparseCreate()
+    B_cpu = A_cpu.T
+    try:
+        for transA in trans_list:
+            transB = transA
+
+            if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
+                opA = A_cpu
+                opB = B_cpu
+            else:
+                opA = A_cpu.T
+                opB = B_cpu.T
+
+            for dtype in cusparse_dtypes:
+                A_CSR = CSR.to_CSR(A_cpu.astype(dtype), h)
+                B_CSR = CSR.to_CSR(B_cpu.astype(dtype), h)
+                C_CSR = A_CSR.gemm(B_CSR, transA=transA, transB=transB)
+
+                # compute on CPU with numpy and compare
+                C_cpu = np.dot(opA, opB)
+                assert_almost_equal(C_CSR.todense(to_cpu=True), C_cpu)
     finally:
         cusparseDestroy(h)

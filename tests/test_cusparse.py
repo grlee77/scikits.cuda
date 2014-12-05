@@ -54,17 +54,17 @@ def test_get_set_PointerMode():
 
 
 def test_matrix_descriptor_create_get_set_destroy():
-    #create matrix description
+    # create matrix description
     descrA = cusparseCreateMatDescr()
 
     try:
-        #get default values/set
+        # get default values/set
         assert cusparseGetMatType(descrA) == CUSPARSE_MATRIX_TYPE_GENERAL
         assert cusparseGetMatDiagType(descrA) == CUSPARSE_DIAG_TYPE_NON_UNIT
         assert cusparseGetMatIndexBase(descrA) == CUSPARSE_INDEX_BASE_ZERO
         assert cusparseGetMatFillMode(descrA) == CUSPARSE_FILL_MODE_LOWER
 
-        #test set/get new values
+        # test set/get new values
         cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_HERMITIAN)
         assert cusparseGetMatType(descrA) == CUSPARSE_MATRIX_TYPE_HERMITIAN
         cusparseSetMatDiagType(descrA, CUSPARSE_DIAG_TYPE_UNIT)
@@ -76,13 +76,14 @@ def test_matrix_descriptor_create_get_set_destroy():
 
         # can't set outside enumerated range
         assert_raises(
-            OverflowError, cusparseSetMatType,descrA,-1)
+            OverflowError, cusparseSetMatType, descrA, -1)
         assert_raises(
             CUSPARSE_STATUS_INVALID_VALUE, cusparseSetMatType, descrA, 100)
         assert_raises(
             CUSPARSE_STATUS_INVALID_VALUE, cusparseSetMatDiagType, descrA, 100)
         assert_raises(
-            CUSPARSE_STATUS_INVALID_VALUE, cusparseSetMatIndexBase, descrA, 100)
+            CUSPARSE_STATUS_INVALID_VALUE, cusparseSetMatIndexBase, descrA,
+            100)
         assert_raises(
             CUSPARSE_STATUS_INVALID_VALUE, cusparseSetMatFillMode, descrA, 100)
 
@@ -105,7 +106,7 @@ def test_dense_nnz():
     cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO)
     cusparseSetPointerMode(handle, CUSPARSE_POINTER_MODE_HOST)
 
-    #loop over all directions and dtypes
+    # loop over all directions and dtypes
     try:
         cusparse_dtypes = [np.float32, np.float64, np.complex64, np.complex128]
         for dirA in [CUSPARSE_DIRECTION_ROW, CUSPARSE_DIRECTION_COLUMN]:
@@ -162,7 +163,7 @@ def test_csrmv():
     csrColIndA = gpuarray.to_gpu(indices)
     m, n = csr_numpy.shape
     alpha = 2.0
-    #loop over all transpose operations and dtypes
+    # loop over all transpose operations and dtypes
     try:
         for transA in trans_list:
             for dtype in cusparse_dtypes:
@@ -213,7 +214,7 @@ def test_csrmm():
     n = 5
     alpha = 2.0
 
-    #loop over all transpose operations and dtypes
+    # loop over all transpose operations and dtypes
     try:
         for transA in trans_list:
             for dtype in cusparse_dtypes:
@@ -342,7 +343,6 @@ def test_csrgeamNnz():
     cusparseSetMatType(descrB, CUSPARSE_MATRIX_TYPE_GENERAL)
     cusparseSetMatIndexBase(descrB, CUSPARSE_INDEX_BASE_ZERO)
 
-
     csrRowPtrA = gpuarray.to_gpu(A_cpu.indptr)
     csrColIndA = gpuarray.to_gpu(A_cpu.indices)
 
@@ -352,8 +352,6 @@ def test_csrgeamNnz():
     m, n = A_cpu.shape
 
     # test alternative case where descrC, csrRowPtrC not preallocated
-    transA = transB = CUSPARSE_OPERATION_NON_TRANSPOSE
-    dtype = np.float32
     descrC, csrRowPtrC, nnzC = _csrgeamNnz(
         handle, m, n, descrA, csrRowPtrA, csrColIndA, descrB, csrRowPtrB,
         csrColIndB, check_inputs=True)
@@ -366,9 +364,9 @@ def test_csrgeamNnz():
         cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
         csrRowPtrC = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
         nnzC = _csrgeamNnz(handle, m, n, descrA, csrRowPtrA, csrColIndA,
-                          descrB, csrRowPtrB, csrColIndB, descrC,
-                          csrRowPtrC, nnzA=None, nnzB=None,
-                          check_inputs=True)
+                           descrB, csrRowPtrB, csrColIndB, descrC,
+                           csrRowPtrC, nnzA=None, nnzB=None,
+                           check_inputs=True)
         assert_equal(nnzC, nnz_expected)
     finally:
         cusparseDestroyMatDescr(descrC)
@@ -439,7 +437,6 @@ def test_csrgemmNnz():
     csr_numpy = scipy.sparse.csr_matrix(A_cpu)
     indptr = csr_numpy.indptr
     indices = csr_numpy.indices
-    csr_data = csr_numpy.data
 
     B_cpu = csr_numpy.T.tocsr()
 
@@ -453,7 +450,6 @@ def test_csrgemmNnz():
     n = B_cpu.shape[1]
     # test alternative case where descrC, csrRowPtrC not preallocated
     transA = transB = CUSPARSE_OPERATION_NON_TRANSPOSE
-    dtype = np.float32
     descrC, csrRowPtrC, nnzC = _csrgemmNnz(
         handle, m, n, k, descrA, csrRowPtrA, csrColIndA, descrB, csrRowPtrB,
         csrColIndB, transA=transA, transB=transB, check_inputs=True)
@@ -463,7 +459,7 @@ def test_csrgemmNnz():
     descrC = cusparseCreateMatDescr()
     cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
 
-    #loop over all transpose operations and dtypes
+    # loop over all transpose operations and dtypes
     try:
         for transA in trans_list:
             transB = transA
@@ -548,11 +544,12 @@ def test_csrgemm():
 
                 try:
                     descrC, csrValC, csrRowPtrC, csrColIndC = csrgemm(
-                        handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA,
-                        descrB, csrValB, csrRowPtrB, csrColIndB, transA=transA,
-                        transB=transB)
+                        handle, m, n, k, descrA, csrValA, csrRowPtrA,
+                        csrColIndA, descrB, csrValB, csrRowPtrB, csrColIndB,
+                        transA=transA, transB=transB)
                     if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
-                        assert_almost_equal(csrValC.get(), [1, 1, 1, 1, 2, 3, 3, 9])
+                        assert_almost_equal(csrValC.get(),
+                                            [1, 1, 1, 1, 2, 3, 3, 9])
                     else:
                         assert_almost_equal(csrValC.get(), [2, 1, 1, 1, 10])
                 finally:
@@ -569,8 +566,6 @@ def test_CSR_construction():
     try:
         for dtype in cusparse_dtypes:
             A = 2*np.eye(n)
-            x_cpu = np.ones((n, ), dtype=dtype)
-            x = gpuarray.to_gpu(x_cpu.astype(dtype))
 
             A_scipy_csr = scipy.sparse.csr_matrix(A)
 
@@ -614,9 +609,8 @@ def test_CSR_construction():
 
 
 def test_CSR_properties():
-    n=64
+    n = 64
     h = cusparseCreate()
-    dtype = np.float32
     A = 2*np.eye(n)
 
     # generate a CSR matrix from a dense numpy array

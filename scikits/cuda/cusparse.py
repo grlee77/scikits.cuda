@@ -32,8 +32,9 @@ except Exception as e:
 # will check dimensions, autoset some variables and call the appriopriate
 # function based on the input dtype
 
+
 def dense_nnz(handle, descrA, A, dirA=CUSPARSE_DIRECTION_ROW, lda=None,
-        nnzPerRowCol=None, nnzTotalDevHostPtr=None):
+              nnzPerRowCol=None, nnzTotalDevHostPtr=None):
     """ higher level wrapper to cusparse<t>nnz routines """
     if not isinstance(A, pycuda.gpuarray.GPUArray):
         raise ValueError("A must be a pyCUDA gpuarray")
@@ -368,11 +369,11 @@ def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
             raise ValueError("ldb invalid for matrix B")
 
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
-            ldOpA=m  # leading dimension for op(A)
-            tdOpA=k  # trailing dimension for op(A)
+            ldOpA = m  # leading dimension for op(A)
+            tdOpA = k  # trailing dimension for op(A)
         else:
-            ldOpA=k
-            tdOpA=m
+            ldOpA = k
+            tdOpA = m
 
         if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
             if B.shape[1] != n:
@@ -561,11 +562,11 @@ def csrgeam(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
 
 
 def _csrgemmNnz(handle, m, n, k, descrA, csrRowPtrA, csrColIndA, descrB,
-            csrRowPtrB, csrColIndB, descrC=None, csrRowPtrC=None, nnzA=None,
-            nnzB=None,
-            transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
-            transB=CUSPARSE_OPERATION_NON_TRANSPOSE,
-            check_inputs=True):
+                csrRowPtrB, csrColIndB, descrC=None, csrRowPtrC=None,
+                nnzA=None, nnzB=None,
+                transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
+                transB=CUSPARSE_OPERATION_NON_TRANSPOSE,
+                check_inputs=True):
     """ higher level wrapper to cusparseXcsrgemmNnz.
 
     Note

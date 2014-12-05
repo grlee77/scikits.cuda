@@ -226,6 +226,190 @@ def csrmv(handle, descrA, csrValA, csrRowPtrA, csrColIndA, m, n, x, nnz=None,
     return y
 
 
+def csrmm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
+          nnz=None, transA=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
+          beta=0.0, ldb=None, ldc=None, check_inputs=True):
+    """ higher level wrapper to cusparse<t>csrmm routines """
+
+    if check_inputs:
+        for item in [csrValA, csrRowPtrA, csrColIndA, B]:
+            if not isinstance(item, pycuda.gpuarray.GPUArray):
+                raise ValueError("csr*, B, must be pyCUDA gpuarrays")
+        if C is not None:
+            if not isinstance(C, pycuda.gpuarray.GPUArray):
+                raise ValueError("C must be a pyCUDA gpuarray or None")
+        # dense matrices must be in column-major order
+        if not B.flags.f_contiguous:
+            raise ValueError("Dense matrix B must be in column-major order")
+
+    dtype = csrValA.dtype
+
+    if C is None:
+        if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
+            ldc = m
+        else:
+            ldc = k
+        C = gpuarray.zeros((ldc, n), dtype=dtype, order='F')
+    elif not C.flags.f_contiguous:
+        raise ValueError("Dense matrix C must be in column-major order")
+
+    if nnz is None:
+        nnz = csrValA.size
+
+    if ldb is None:
+        ldb = B.shape[0]
+
+    if ldc is None:
+        ldc = C.shape[0]
+
+    # perform some basic sanity checks
+    if check_inputs:
+        if csrValA.size != nnz:
+            raise ValueError("length of csrValA array must match nnz")
+
+        if (B.dtype != dtype) or (C.dtype != dtype):
+            raise ValueError("A, B, C must share a common dtype")
+
+        if ldb < B.shape[0]:
+            raise ValueError("ldb invalid for matrix B")
+
+        if ldc < C.shape[0]:
+            raise ValueError("ldc invalid for matrix C")
+
+        if (C.shape[1] != n) or (B.shape[1] != n):
+            raise ValueError("bad shape for B or C")
+
+        if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
+            if (ldb != k) or (ldc != m):
+                raise ValueError("size of A incompatible with B or C")
+        else:
+            if (ldb != m) or (ldc != k):
+                raise ValueError("size of A incompatible with B or C")
+
+        if csrRowPtrA.size != m+1:
+            raise ValueError("length of csrRowPtrA invalid")
+
+    if dtype == np.float32:
+        fn = cusparseScsrmm
+    elif dtype == np.float64:
+        fn = cusparseDcsrmm
+    elif dtype == np.complex64:
+        fn = cusparseCcsrmm
+    elif dtype == np.complex128:
+        fn = cusparseZcsrmm
+    else:
+        raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
+    fn(handle, transA, m, n, k, nnz, alpha, descrA, csrValA, csrRowPtrA,
+       csrColIndA, B, ldb, beta, C, ldc)
+    return C
+
+
+def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
+           nnz=None, transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
+           transB=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
+           beta=0.0, ldb=None, ldc=None, check_inputs=True):
+    """ higher level wrapper to cusparse<t>csrmm routines """
+
+    if check_inputs:
+        for item in [csrValA, csrRowPtrA, csrColIndA, B]:
+            if not isinstance(item, pycuda.gpuarray.GPUArray):
+                raise ValueError("csr*, B, must be pyCUDA gpuarrays")
+        if C is not None:
+            if not isinstance(C, pycuda.gpuarray.GPUArray):
+                raise ValueError("C must be a pyCUDA gpuarray or None")
+        # dense matrices must be in column-major order
+        if not B.flags.f_contiguous:
+            raise ValueError("Dense matrix B must be in column-major order")
+
+        if transB == CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE:
+            raise ValueError("Conjugate transpose operation not supported for"
+                             "dense matrix B")
+
+        if (transB == CUSPARSE_OPERATION_TRANSPOSE) and \
+           (transA != CUSPARSE_OPERATION_NON_TRANSPOSE):
+               raise ValueError("if B is transposed, only A non-transpose"
+                                "is supported")
+
+    dtype = csrValA.dtype
+
+    if C is None:
+        if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
+            ldc = m
+        else:
+            ldc = k
+        C = gpuarray.zeros((ldc, n), dtype=dtype, order='F')
+    elif not C.flags.f_contiguous:
+        raise ValueError("Dense matrix C must be in column-major order")
+
+    if nnz is None:
+        nnz = csrValA.size
+
+    if ldb is None:
+        ldb = B.shape[0]
+
+    if ldc is None:
+        ldc = C.shape[0]
+
+    # perform some basic sanity checks
+    if check_inputs:
+        if csrValA.size != nnz:
+            raise ValueError("length of csrValA array must match nnz")
+
+        if (B.dtype != dtype) or (C.dtype != dtype):
+            raise ValueError("A, B, C must share a common dtype")
+
+        if ldb < B.shape[0]:
+            raise ValueError("ldb invalid for matrix B")
+
+        if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
+            ldOpA=m  # leading dimension for op(A)
+            tdOpA=k  # trailing dimension for op(A)
+        else:
+            ldOpA=k
+            tdOpA=m
+
+        if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
+            if B.shape[1] != n:
+                raise ValueError("B, n incompatible")
+            if (ldb < tdOpA):
+                raise ValueError("size of A incompatible with B")
+        else:
+            if ldb < n:
+                raise ValueError("B, n incompatible")
+            if (B.shape[1] != tdOpA):
+                raise ValueError("size of A incompatible with B")
+
+        if (C.shape[1] != n):
+            raise ValueError("bad shape for C")
+
+        if (ldc != ldOpA):
+            raise ValueError("size of A incompatible with C")
+
+        if csrRowPtrA.size != m+1:
+            raise ValueError("length of csrRowPtrA invalid")
+
+    if dtype == np.float32:
+        fn = cusparseScsrmm2
+    elif dtype == np.float64:
+        fn = cusparseDcsrmm2
+    elif dtype == np.complex64:
+        fn = cusparseCcsrmm2
+    elif dtype == np.complex128:
+        fn = cusparseZcsrmm2
+    else:
+        raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
+    transa = transA
+    transb = transB
+    try:
+        fn(handle, transa, transb, m, n, k, nnz, alpha, descrA, csrValA,
+           csrRowPtrA, csrColIndA, B, ldb, beta, C, ldc)
+    except CUSPARSE_STATUS_INVALID_VALUE as e:
+        print("m={}, n={}, k={}, nnz={}, ldb={}, ldc={}".format(
+            m, n, k, nnz, ldb, ldc))
+        raise(e)
+    return C
+
+
 def _csrgemmNnz(handle, m, n, k, descrA, csrRowPtrA, csrColIndA, descrB,
             csrRowPtrB, csrColIndB, descrC, csrRowPtrC, nnzA=None, nnzB=None,
             transA=CUSPARSE_OPERATION_NON_TRANSPOSE,

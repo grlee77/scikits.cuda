@@ -410,8 +410,153 @@ def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
     return C
 
 
+def _csrgeamNnz(handle, m, n, descrA, csrRowPtrA, csrColIndA, descrB,
+                csrRowPtrB, csrColIndB, descrC=None, csrRowPtrC=None,
+                nnzA=None, nnzB=None, check_inputs=True):
+    """ higher level wrapper to cusparseXcsrgemmNnz.
+
+    Note
+    ----
+    transA(A) is shape m x k.  transB(B) is shape k x n.  C is shape m x n
+    """
+    if check_inputs:
+        for array in [csrRowPtrA, csrColIndA, csrRowPtrB, csrColIndB]:
+            if not isinstance(array, pycuda.gpuarray.GPUArray):
+                raise ValueError("all csr* inputs must be a pyCUDA gpuarray")
+        if cusparseGetMatType(descrA) != CUSPARSE_MATRIX_TYPE_GENERAL:
+            raise ValueError("Only general matrix type supported")
+        if cusparseGetMatType(descrB) != CUSPARSE_MATRIX_TYPE_GENERAL:
+            raise ValueError("Only general matrix type supported")
+        if descrC is not None:
+            if not isinstance(csrRowPtrC, pycuda.gpuarray.GPUArray):
+                raise ValueError("csrRowPtrC must be a gpuarray or None")
+            if cusparseGetMatType(descrC) != CUSPARSE_MATRIX_TYPE_GENERAL:
+                raise ValueError("Only general matrix type supported")
+
+    if nnzA is None:
+        nnzA = csrColIndA.size
+    if nnzB is None:
+        nnzB = csrColIndB.size
+
+    if descrC is None:
+        return_descrC = True
+        descrC = cusparseCreateMatDescr()
+        cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
+    else:
+        return_descrC = False
+    if csrRowPtrC is None:
+        csrRowPtrC = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
+
+    nnzTotalDevHostPtr = ffi.new('int *', 0)
+
+    # perform some basic sanity checks
+    if check_inputs:
+        if csrColIndA.size != nnzA:
+            raise ValueError("length of csrValA array must match nnzA")
+        if csrColIndB.size != nnzB:
+            raise ValueError("length of csrValB array must match nnzB")
+        if csrRowPtrA.size != m+1:
+            raise ValueError("length of csrRowPtrA array must be m+1")
+        if csrRowPtrB.size != m+1:
+            raise ValueError("length of csrRowPtrB array must be m+1")
+
+    cusparseXcsrgeamNnz(handle, m, n, descrA, nnzA, csrRowPtrA, csrColIndA,
+                        descrB, nnzB, csrRowPtrB, csrColIndB, descrC,
+                        csrRowPtrC, nnzTotalDevHostPtr)
+    nnzC = nnzTotalDevHostPtr[0]
+    if return_descrC:
+        return descrC, csrRowPtrC, nnzC
+    else:
+        return nnzC
+
+
+def csrgeam(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
+            csrValB, csrRowPtrB, csrColIndB, alpha=1.0, beta=0.0, nnzA=None,
+            nnzB=None,  check_inputs=True):
+    """ higher level wrapper to cusparse<t>csrgemm routines.
+
+    Note
+    ----
+    transA(A) is shape m x k.  transB(B) is shape k x n.  C is shape m x n
+
+    if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
+        m, k = A.shape
+    else:
+        k, m = A.shape
+
+    if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
+        k, n = B.shape
+    else:
+        n, k = B.shape
+
+    """
+    if check_inputs:
+        for array in [csrValA, csrRowPtrA, csrColIndA, csrValB, csrRowPtrB,
+                      csrColIndB]:
+            if not isinstance(array, pycuda.gpuarray.GPUArray):
+                raise ValueError("all csr* inputs must be a pyCUDA gpuarray")
+        if cusparseGetMatType(descrA) != CUSPARSE_MATRIX_TYPE_GENERAL:
+            raise ValueError("Only general matrix type supported")
+        if cusparseGetMatType(descrB) != CUSPARSE_MATRIX_TYPE_GENERAL:
+            raise ValueError("Only general matrix type supported")
+
+    if nnzA is None:
+        nnzA = csrValA.size
+    if nnzB is None:
+        nnzB = csrValB.size
+
+    dtype = csrValA.dtype
+
+    # perform some basic sanity checks
+    if check_inputs:
+        if csrValA.size != nnzA:
+            raise ValueError("length of csrValA array must match nnzA")
+        if csrValB.size != nnzB:
+            raise ValueError("length of csrValB array must match nnzB")
+        if (dtype != csrValB.dtype):
+            raise ValueError("incompatible dtypes")
+
+    # perform some basic sanity checks
+    if check_inputs:
+        if csrRowPtrA.size != m + 1:
+            raise ValueError("bad csrRowPtrA size")
+        if csrRowPtrB.size != m + 1:
+            raise ValueError("bad csrRowPtrB size")
+
+    # allocate output matrix C descr and row pointers
+    descrC = cusparseCreateMatDescr()
+    cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
+    csrRowPtrC = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
+
+    # call csrgemmNnz to determine nnzC and fill in csrRowPtrC
+    nnzC = _csrgeamNnz(handle, m, n, descrA, csrRowPtrA, csrColIndA,
+                       descrB, csrRowPtrB, csrColIndB, descrC, csrRowPtrC,
+                       nnzA=nnzA, nnzB=nnzB, check_inputs=False)
+
+    # allocated rest of C based on nnzC
+    csrValC = gpuarray.to_gpu(np.zeros((nnzC, ), dtype=dtype))
+    csrColIndC = gpuarray.to_gpu(np.zeros((nnzC, ), dtype=np.int32))
+
+    if dtype == np.float32:
+        fn = cusparseScsrgeam
+    elif dtype == np.float64:
+        fn = cusparseDcsrgeam
+    elif dtype == np.complex64:
+        fn = cusparseCcsrgeam
+    elif dtype == np.complex128:
+        fn = cusparseZcsrgeam
+    else:
+        raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
+
+    fn(handle, m, n, alpha, descrA, nnzA, csrValA, csrRowPtrA, csrColIndA,
+       beta, descrB, nnzB, csrValB, csrRowPtrB, csrColIndB, descrC, csrValC,
+       csrRowPtrC, csrColIndC)
+    return (descrC, csrValC, csrRowPtrC, csrColIndC)
+
+
 def _csrgemmNnz(handle, m, n, k, descrA, csrRowPtrA, csrColIndA, descrB,
-            csrRowPtrB, csrColIndB, descrC, csrRowPtrC, nnzA=None, nnzB=None,
+            csrRowPtrB, csrColIndB, descrC=None, csrRowPtrC=None, nnzA=None,
+            nnzB=None,
             transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
             transB=CUSPARSE_OPERATION_NON_TRANSPOSE,
             check_inputs=True):
@@ -429,10 +574,24 @@ def _csrgemmNnz(handle, m, n, k, descrA, csrRowPtrA, csrColIndA, descrB,
             raise ValueError("Only general matrix type supported")
         if cusparseGetMatType(descrB) != CUSPARSE_MATRIX_TYPE_GENERAL:
             raise ValueError("Only general matrix type supported")
+        if descrC is not None:
+            if not isinstance(csrRowPtrC, pycuda.gpuarray.GPUArray):
+                raise ValueError("csrRowPtrC must be a gpuarray or None")
+            if cusparseGetMatType(descrC) != CUSPARSE_MATRIX_TYPE_GENERAL:
+                raise ValueError("Only general matrix type supported")
     if nnzA is None:
         nnzA = csrColIndA.size
     if nnzB is None:
         nnzB = csrColIndB.size
+
+    if descrC is None:
+        return_descrC  = True
+        descrC = cusparseCreateMatDescr()
+        cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
+    else:
+        return_descrC = False
+    if csrRowPtrC is None:
+        csrRowPtrC = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
 
     nnzTotalDevHostPtr = ffi.new('int *', 0)
 
@@ -459,7 +618,10 @@ def _csrgemmNnz(handle, m, n, k, descrA, csrRowPtrA, csrColIndA, descrB,
                         csrRowPtrA, csrColIndA, descrB, nnzB, csrRowPtrB,
                         csrColIndB, descrC, csrRowPtrC, nnzTotalDevHostPtr)
     nnzC = nnzTotalDevHostPtr[0]
-    return nnzC
+    if return_descrC:
+        return descrC, csrRowPtrC, nnzC
+    else:
+        return nnzC
 
 
 def csrgemm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,

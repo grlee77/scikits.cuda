@@ -1,5 +1,5 @@
 from scikits.cuda.cusparse import *
-from scikits.cuda.cusparse import _csrgemmNnz
+from scikits.cuda.cusparse import (_csrgeamNnz, _csrgemmNnz)
 
 import numpy as np
 from numpy.testing import assert_raises, assert_equal, assert_almost_equal
@@ -324,7 +324,105 @@ def test_csrmm2():
         cusparseDestroyMatDescr(descrA)
 
 
-def test_csrmmNnz():
+def test_csrgeamNnz():
+    A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
+    A_cpu = scipy.sparse.csr_matrix(A_cpu)
+    B_cpu = np.asarray([[0, 1, 0], [0, 0, 1], [0, 0, 0], [0, 0, 0]])
+    B_cpu = scipy.sparse.csr_matrix(B_cpu)
+    C_cpu = A_cpu + B_cpu
+    nnz_expected = C_cpu.getnnz()
+
+    handle = cusparseCreate()
+    cusparseSetPointerMode(handle, CUSPARSE_POINTER_MODE_HOST)
+
+    descrA = cusparseCreateMatDescr()
+    cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_GENERAL)
+    cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO)
+
+    descrB = cusparseCreateMatDescr()
+    cusparseSetMatType(descrB, CUSPARSE_MATRIX_TYPE_GENERAL)
+    cusparseSetMatIndexBase(descrB, CUSPARSE_INDEX_BASE_ZERO)
+
+
+    csrRowPtrA = gpuarray.to_gpu(A_cpu.indptr)
+    csrColIndA = gpuarray.to_gpu(A_cpu.indices)
+
+    csrRowPtrB = gpuarray.to_gpu(B_cpu.indptr)
+    csrColIndB = gpuarray.to_gpu(B_cpu.indices)
+
+    m, n = A_cpu.shape
+
+    # test alternative case where descrC, csrRowPtrC not preallocated
+    transA = transB = CUSPARSE_OPERATION_NON_TRANSPOSE
+    dtype = np.float32
+    descrC, csrRowPtrC, nnzC = _csrgeamNnz(
+        handle, m, n, descrA, csrRowPtrA, csrColIndA, descrB, csrRowPtrB,
+        csrColIndB, check_inputs=True)
+    cusparseDestroyMatDescr(descrC)
+    assert_equal(nnzC, nnz_expected)
+
+    # now test cases with preallocated matrix descrC & csrrowPtrC
+    descrC = cusparseCreateMatDescr()
+    try:
+        cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
+        csrRowPtrC = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
+        nnzC = _csrgeamNnz(handle, m, n, descrA, csrRowPtrA, csrColIndA,
+                          descrB, csrRowPtrB, csrColIndB, descrC,
+                          csrRowPtrC, nnzA=None, nnzB=None,
+                          check_inputs=True)
+        assert_equal(nnzC, nnz_expected)
+    finally:
+        cusparseDestroyMatDescr(descrC)
+
+
+def test_csrgeam():
+    A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
+    A_cpu = scipy.sparse.csr_matrix(A_cpu)
+    B_cpu = np.asarray([[0, 1, 0], [0, 0, 1], [0, 0, 0], [0, 0, 0]])
+    B_cpu = scipy.sparse.csr_matrix(B_cpu)
+
+    handle = cusparseCreate()
+    cusparseSetPointerMode(handle, CUSPARSE_POINTER_MODE_HOST)
+
+    descrA = cusparseCreateMatDescr()
+    cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_GENERAL)
+    cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO)
+
+    descrB = cusparseCreateMatDescr()
+    cusparseSetMatType(descrB, CUSPARSE_MATRIX_TYPE_GENERAL)
+    cusparseSetMatIndexBase(descrB, CUSPARSE_INDEX_BASE_ZERO)
+
+    csrRowPtrA = gpuarray.to_gpu(A_cpu.indptr)
+    csrColIndA = gpuarray.to_gpu(A_cpu.indices)
+
+    csrRowPtrB = gpuarray.to_gpu(B_cpu.indptr)
+    csrColIndB = gpuarray.to_gpu(B_cpu.indices)
+
+    m, n = A_cpu.shape
+
+    alpha = 0.3
+    beta = 5.0
+    C_cpu = alpha*A_cpu + beta*B_cpu
+
+    try:
+        for dtype in cusparse_dtypes:
+            csrValA = gpuarray.to_gpu(A_cpu.data.astype(dtype))
+            csrValB = gpuarray.to_gpu(B_cpu.data.astype(dtype))
+            try:
+                descrC, csrValC, csrRowPtrC, csrColIndC = csrgeam(
+                    handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA,
+                    descrB, csrValB, csrRowPtrB, csrColIndB, alpha=alpha,
+                    beta=beta)
+                assert_almost_equal(csrValC.get(), C_cpu.data)
+            finally:
+                cusparseDestroyMatDescr(descrC)
+    finally:
+        cusparseDestroy(handle)
+        cusparseDestroyMatDescr(descrA)
+        cusparseDestroyMatDescr(descrB)
+
+
+def test_csrgemmNnz():
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
     # A = gpuarray.to_gpu(A_cpu)
 
@@ -338,9 +436,6 @@ def test_csrmmNnz():
     descrB = cusparseCreateMatDescr()
     cusparseSetMatType(descrB, CUSPARSE_MATRIX_TYPE_GENERAL)
     cusparseSetMatIndexBase(descrB, CUSPARSE_INDEX_BASE_ZERO)
-
-    descrC = cusparseCreateMatDescr()
-    cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
 
     csr_numpy = scipy.sparse.csr_matrix(A_cpu)
     indptr = csr_numpy.indptr
@@ -356,6 +451,18 @@ def test_csrmmNnz():
     csrColIndB = gpuarray.to_gpu(B_cpu.indices)
 
     m, k = A_cpu.shape
+    n = B_cpu.shape[1]
+    # test alternative case where descrC, csrRowPtrC not preallocated
+    transA = transB = CUSPARSE_OPERATION_NON_TRANSPOSE
+    dtype = np.float32
+    descrC, csrRowPtrC, nnzC = _csrgemmNnz(
+        handle, m, n, k, descrA, csrRowPtrA, csrColIndA, descrB, csrRowPtrB,
+        csrColIndB, transA=transA, transB=transB, check_inputs=True)
+    cusparseDestroyMatDescr(descrC)
+
+    # now test cases with preallocated matrix description
+    descrC = cusparseCreateMatDescr()
+    cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
 
     #loop over all transpose operations and dtypes
     try:
@@ -392,6 +499,7 @@ def test_csrmmNnz():
         cusparseDestroyMatDescr(descrC)
 
 
+
 def test_csrgemm():
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
     # A = gpuarray.to_gpu(A_cpu)
@@ -406,9 +514,6 @@ def test_csrgemm():
     descrB = cusparseCreateMatDescr()
     cusparseSetMatType(descrB, CUSPARSE_MATRIX_TYPE_GENERAL)
     cusparseSetMatIndexBase(descrB, CUSPARSE_INDEX_BASE_ZERO)
-
-    descrC = cusparseCreateMatDescr()
-    cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
 
     csr_numpy = scipy.sparse.csr_matrix(A_cpu)
     indptr = csr_numpy.indptr
@@ -425,31 +530,38 @@ def test_csrgemm():
 
     m, k = A_cpu.shape
 
-    for transA in trans_list:
-        transB = transA
+    try:
+        for transA in trans_list:
+            transB = transA
 
-        if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
-            m, k = A_cpu.shape
-        else:
-            k, m = A_cpu.shape
-        if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
-            kB, n = B_cpu.shape
-        else:
-            n, kB = B_cpu.shape
-
-        for dtype in cusparse_dtypes:
-            csrValA = gpuarray.to_gpu(csr_data.astype(dtype))
-            csrValB = gpuarray.to_gpu(B_cpu.data.astype(dtype))
-
-            descrC, csrValC, csrRowPtrC, csrColIndC = csrgemm(
-                handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA,
-                descrB, csrValB, csrRowPtrB, csrColIndB, transA=transA,
-                transB=transB)
             if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
-                assert_almost_equal(csrValC.get(), [1, 1, 1, 1, 2, 3, 3, 9])
+                m, k = A_cpu.shape
             else:
-                assert_almost_equal(csrValC.get(), [2, 1, 1, 1, 10])
+                k, m = A_cpu.shape
+            if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
+                kB, n = B_cpu.shape
+            else:
+                n, kB = B_cpu.shape
 
+            for dtype in cusparse_dtypes:
+                csrValA = gpuarray.to_gpu(csr_data.astype(dtype))
+                csrValB = gpuarray.to_gpu(B_cpu.data.astype(dtype))
+
+                try:
+                    descrC, csrValC, csrRowPtrC, csrColIndC = csrgemm(
+                        handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA,
+                        descrB, csrValB, csrRowPtrB, csrColIndB, transA=transA,
+                        transB=transB)
+                    if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
+                        assert_almost_equal(csrValC.get(), [1, 1, 1, 1, 2, 3, 3, 9])
+                    else:
+                        assert_almost_equal(csrValC.get(), [2, 1, 1, 1, 10])
+                finally:
+                    cusparseDestroyMatDescr(descrC)
+    finally:
+        cusparseDestroy(handle)
+        cusparseDestroyMatDescr(descrA)
+        cusparseDestroyMatDescr(descrB)
 
 def run_all():
     print("Testing context creation")

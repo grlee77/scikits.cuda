@@ -5,6 +5,12 @@ import numpy as np
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 
+try:
+    import scipy.sparse
+    has_scipy = True
+except ImportError:
+    has_scipy = False
+
 """
 Python interface to cuSPARSE functions.
 
@@ -68,7 +74,7 @@ def dense2csr(A, handle=None, descrA=None, lda=None, check_inputs=True):
 
     # try moving list or numpy array to GPU
     if not isinstance(A, pycuda.gpuarray.GPUArray):
-        A = np.atleast_2d(A)
+        A = np.asfortranarray(np.atleast_2d(A))
         A = gpuarray.to_gpu(A)
 
     if check_inputs:
@@ -79,6 +85,8 @@ def dense2csr(A, handle=None, descrA=None, lda=None, check_inputs=True):
         if descrA is not None:
             if cusparseGetMatType(descrA) != CUSPARSE_MATRIX_TYPE_GENERAL:
                 raise ValueError("Only general matrix type supported")
+        if not A.flags.f_contiguous:
+            raise ValueError("Dense matrix A must be in column-major order")
 
     if lda is None:
         lda = A.shape[0]
@@ -720,40 +728,122 @@ def csrgemm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
     return (descrC, csrValC, csrRowPtrC, csrColIndC)
 
 
-
-class CSR:
+class CSR(object):
     def __init__(self, handle, descr, csrVal, csrRowPtr, csrColInd, shape):
         self.handle = handle
         self.descr = descr
         self.Val = csrVal
         self.RowPtr = csrRowPtr
         self.ColInd = csrColInd
-        self.nnz = csrVal.size
+        self.dtype = csrVal.dtype
+        self.shape = shape
 
-        # mirror scipys.sparse names
+        # also mirror scipy.sparse.csr_matrix property names for convenience
         self.data = csrVal
         self.indices = csrColInd
         self.indptr = csrRowPtr
 
-        # TODO: change these to properties?
-        if descr is not None:
-            self.matrix_type = cusparseGetMatType(descr)
-            self.index_base = cusparseGetMatIndexBase(descr)
-            self.diag_type = cusparseGetMatDiagType(descr)
-            self.fill_mode = cusparseGetMatFillMode(descr)
-        if csrVal is not None:
-            self.dtype = csrVal.dtype
-
-        self.shape = shape
+        # properties
+        self.__matrix_type = None
+        self.__index_base = None
+        self.__diag_type = None
+        self.__fill_mode = None
 
     # alternative constructor from dense ndarray, gpuarray or cuSPARSE matrix
     @classmethod
-    def to_CSR(cls, A, handle=None):
-        """Takes dense numpy array and returns in CSR format"""
-        (handle, descr, csrVal, csrRowPtr, csrColInd) = dense2csr(A, handle)
+    def to_CSR(cls, A, handle):
+        if has_scipy and isinstance(A, scipy.sparse.spmatrix):
+            """Convert scipy.sparse CSR, COO, BSR, etc to cuSPARSE CSR"""
+            # converting BSR, COO, etc to CSR
+            if not isinstance(A, scipy.sparse.csr_matrix):
+                A = A.tocsr()
+
+            csrRowPtr = gpuarray.to_gpu(A.indptr.astype(np.int32))
+            csrColInd = gpuarray.to_gpu(A.indices.astype(np.int32))
+            csrVal = gpuarray.to_gpu(A.data.astype(A.dtype))
+            descr = cusparseCreateMatDescr()
+            cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL)
+            cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO)
+        else:
+            """Takes dense numpy array or pyCUDA gpuarray and returns in CSR
+            format"""
+            if not isinstance(A, pycuda.gpuarray.GPUArray):
+                A = np.asfortranarray(np.atleast_2d(A))
+                A = gpuarray.to_gpu(A)
+            else:
+                # dense matrix must be column-major
+                if not A.flags.f_contiguous:
+                    # TODO :an change to Fortran ordering be done directly on
+                    # the gpuarray without going back to numpy?
+                    A = A.get()
+                    A = np.asfortranarray(A)
+                    A = gpuarray.to_gpu(A)
+
+            (handle, descr, csrVal, csrRowPtr, csrColInd) = dense2csr(A,
+                                                                      handle)
         return cls(handle, descr, csrVal, csrRowPtr, csrColInd, A.shape)
 
-    def to_dense(self, lda = None):
+    @property
+    def matrix_type(self):
+        "matrix type"
+        if self.__matrix_type is None:
+            return cusparseGetMatType(self.descr)
+        else:
+            return self.__matrix_type
+
+    @matrix_type.setter
+    def matrix_type(self, matrix_type):
+        "matrix type"
+        self.__matrix_type = cusparseSetMatType(self.descr, matrix_type)
+
+    @property
+    def index_base(self):
+        "matrix index base"
+        if self.__index_base is None:
+            return cusparseGetMatIndexBase(self.descr)
+        else:
+            return self.__index_base
+
+    @index_base.setter
+    def index_base(self, index_base):
+        "matrix index base"
+        self.__index_base = cusparseSetMatIndexBase(self.descr, index_base)
+
+    @property
+    def diag_type(self):
+        "matrix diag type"
+        if self.__diag_type is None:
+            return cusparseGetMatDiagType(self.descr)
+        else:
+            return self.__diag_type
+
+    @diag_type.setter
+    def diag_type(self, diag_type):
+        "matrix diag type"
+        self.__diag_type = cusparseSetMatDiagType(self.descr, diag_type)
+
+    @property
+    def fill_mode(self):
+        "matrix fill mode"
+        if self.__fill_mode is None:
+            return cusparseGetMatFillMode(self.descr)
+        else:
+            return self.__fill_mode
+
+    @fill_mode.setter
+    def fill_mode(self, fill_mode):
+        "matrix fill mode"
+        self.__fill_mode = cusparseSetMatFillMode(self.descr, fill_mode)
+
+    @property
+    def nnz(self):
+        return self.Val.size
+
+    def getnnz(self):
+        """mirror the function name from scipy"""
+        return self.nnz
+
+    def todense(self, lda=None, to_cpu=False):
         """ returns dense gpuarray A """
         m, n = self.shape
         if lda is None:
@@ -761,10 +851,84 @@ class CSR:
         else:
             assert lda >= m
         A = csr2dense(self.handle, m, n, self.descr, self.Val, self.RowPtr,
-            self.ColInd, lda=lda)
-        return A
+                      self.ColInd, lda=lda)
+        if to_cpu:
+            return A.get()
+        else:
+            return A
 
-    # TODO: overload __mul__, etc.
+    def mv(self, x, transA=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
+           beta=0.0, y=None, check_inputs=True, to_cpu=False):
+        """ returns dense gpuarray A """
+        m, n = self.shape
+
+        # try moving list or numpy array to GPU
+        if not isinstance(x, pycuda.gpuarray.GPUArray):
+            x = np.atleast_1d(x).astype(self.dtype)
+            x = gpuarray.to_gpu(x)
+
+        y = csrmv(self.handle, self.descr, self.Val, self.RowPtr,
+                  self.ColInd, m, n, x,
+                  transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
+                  alpha=alpha, beta=beta, y=y, check_inputs=check_inputs)
+        if to_cpu:
+            return y.get()
+        else:
+            return y
+
+    def mm(self, B, transA=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
+           beta=0.0, C=None, ldb=None, ldc=None, check_inputs=True,
+           to_cpu=False):
+        """ returns dense gpuarray C """
+        m, k = self.shape
+
+        # try moving list or numpy array to GPU
+        if not isinstance(B, pycuda.gpuarray.GPUArray):
+            B = np.atleast_2d(B).astype(self.dtype)
+            B = gpuarray.to_gpu(B)
+
+        n = B.shape[1]
+
+        C = csrmm(handle=self.handle, m=m, n=n, k=k, descrA=self.descr,
+                  csrValA=self.Val, csrRowPtrA=self.RowPtr,
+                  csrColIndA=self.ColInd,  B=B, C=C, transA=transA,
+                  alpha=alpha, beta=beta, ldb=ldb, ldc=ldc,
+                  check_inputs=check_inputs)
+        if to_cpu:
+            return C.get()
+        else:
+            return C
+
+    def mm2(self, B, transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
+            transB=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0, beta=0.0,
+            C=None, ldb=None, ldc=None, check_inputs=True, to_cpu=False):
+        """ returns dense gpuarray C """
+        m, k = self.shape
+
+        # try moving list or numpy array to GPU
+        if not isinstance(B, pycuda.gpuarray.GPUArray):
+            B = np.atleast_2d(B).astype(self.dtype)
+            B = gpuarray.to_gpu(B)
+
+        if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
+            n = B.shape[1]
+        else:
+            n = B.shape[0]
+
+        C = csrmm2(handle=self.handle, m=m, n=n, k=k, descrA=self.descr,
+                   csrValA=self.Val, csrRowPtrA=self.RowPtr,
+                   csrColIndA=self.ColInd, B=B, C=C, transA=transA,
+                   transB=transB, alpha=alpha, beta=beta, ldb=ldb, ldc=ldc,
+                   check_inputs=check_inputs)
+        if to_cpu:
+            return C.get()
+        else:
+            return C
+
+    def __del__(self):
+        # delete the matrix description object
+        cusparseDestroyMatDescr(self.descr)
+        # don't destroy the handle as other objects may be using it
 
     def __repr__(self):
         rstr = "CSR matrix:\n"

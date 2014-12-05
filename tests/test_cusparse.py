@@ -142,7 +142,6 @@ def test_dense2csr_csr2dense():
             cusparseDestroyMatDescr(descrA)
 
 
-
 def test_csrmv():
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
     # A = gpuarray.to_gpu(A_cpu)
@@ -221,7 +220,6 @@ def test_csrmm():
 
                 m, k = A_cpu.shape
                 if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
-                    m, k = A_cpu.shape
                     B_cpu = np.ones((k, n), dtype=dtype, order='F')
                     expected_result = alpha * np.dot(A_cpu, B_cpu)
                 else:
@@ -563,28 +561,234 @@ def test_csrgemm():
         cusparseDestroyMatDescr(descrA)
         cusparseDestroyMatDescr(descrB)
 
-def run_all():
-    print("Testing context creation")
-    test_context_create_destroy()
-    print("Test HYB matrix creation")
-    test_create_destroy_hyb()
-    print("Testing get version")
-    test_get_version()
-    print("Testing PointerMode")
-    test_get_set_PointerMode()
-    print("Testing Matrix Descriptor")
-    test_matrix_descriptor_create_get_set_destroy()
-    print("Testing dense nnz")
-    test_dense_nnz()
-    print("Testing dense2csr and csr2dense")
-    test_dense2csr_csr2dense()
-    print("Testing CSR mv")
-    test_csrmv()
-    print("Testing CSR mm")
-    test_csrmm()
-    print("Testing CSR mm2")
-    test_csrmm2()
-    print("Testing CSR gemmNnz")
-    test_csrgemmNnz()
-    print("Testing CSR gemm")
-    test_csrgemm()
+
+    n=64
+    h = cusparseCreate()
+    try:
+        for dtype in cusparse_dtypes:
+            A = 2*np.eye(n)
+            x_cpu = np.ones((n, ), dtype=dtype)
+            x = gpuarray.to_gpu(x_cpu.astype(dtype))
+
+            A_scipy_csr = scipy.sparse.csr_matrix(A)
+
+            # generate a CSR matrix from a dense gpuarray
+            A_CSR = CSR.to_CSR(gpuarray.to_gpu(A), h)
+            assert_equal(A_CSR.Val.get(), A_scipy_csr.data)
+
+            # generate a CSR matrix from a dense numpy array
+            A_CSR = CSR.to_CSR(A, h)
+            assert_equal(A_CSR.Val.get(), A_scipy_csr.data)
+
+            # generate a CSR matrix from a list of lists
+            A_CSR = CSR.to_CSR(A.tolist(), h)
+            assert_equal(A_CSR.Val.get(), A_scipy_csr.data)
+
+            # generate a csSPARSE CSR matrix from a scipy.sparse CSR matrix
+            A_CSR = CSR.to_CSR(A_scipy_csr, h)
+            assert_equal(A_CSR.Val.get(), A_scipy_csr.data)
+
+            # generate a csSPARSE CSR matrix from a scipy.sparse BSR matrix
+            A_CSR = CSR.to_CSR(scipy.sparse.bsr_matrix(A), h)
+            assert_equal(A_CSR.Val.get(), A_scipy_csr.data)
+
+            # generate a csSPARSE CSR matrix from a scipy.sparse COO matrix
+            A_CSR = CSR.to_CSR(scipy.sparse.coo_matrix(A), h)
+            assert_equal(A_CSR.Val.get(), A_scipy_csr.data)
+
+            # generate a csSPARSE CSR matrix from a scipy.sparse CSC matrix
+            A_CSR = CSR.to_CSR(scipy.sparse.csc_matrix(A), h)
+            assert_equal(A_CSR.Val.get(), A_scipy_csr.data)
+
+            # generate a csSPARSE CSR matrix from a scipy.sparse DIA matrix
+            A_CSR = CSR.to_CSR(scipy.sparse.dia_matrix(A), h)
+            assert_equal(A_CSR.Val.get(), A_scipy_csr.data)
+
+            # generate a csSPARSE CSR matrix from a scipy.sparse DOK matrix
+            A_CSR = CSR.to_CSR(scipy.sparse.dok_matrix(A), h)
+            assert_equal(A_CSR.Val.get(), A_scipy_csr.data)
+    finally:
+        cusparseDestroy(h)
+
+
+def test_CSR_properties():
+    n=64
+    h = cusparseCreate()
+    dtype = np.float32
+    A = 2*np.eye(n)
+
+    # generate a CSR matrix from a dense numpy array
+    A_CSR = CSR.to_CSR(A, h)
+
+    # test shape
+    assert A_CSR.shape == A.shape
+
+    # test matrix_type property
+    assert A_CSR.matrix_type == CUSPARSE_MATRIX_TYPE_GENERAL
+    A_CSR.matrix_type = CUSPARSE_MATRIX_TYPE_SYMMETRIC
+    assert A_CSR.matrix_type == CUSPARSE_MATRIX_TYPE_SYMMETRIC
+    assert cusparseGetMatType(A_CSR.descr) == CUSPARSE_MATRIX_TYPE_SYMMETRIC
+
+    # test index_base property
+    assert A_CSR.index_base == CUSPARSE_INDEX_BASE_ZERO
+    A_CSR.index_base = CUSPARSE_INDEX_BASE_ONE
+    assert A_CSR.index_base == CUSPARSE_INDEX_BASE_ONE
+    assert cusparseGetMatIndexBase(A_CSR.descr) == CUSPARSE_INDEX_BASE_ONE
+
+    # test diag_type property
+    assert A_CSR.diag_type == CUSPARSE_DIAG_TYPE_NON_UNIT
+    A_CSR.diag_type = CUSPARSE_DIAG_TYPE_UNIT
+    assert A_CSR.diag_type == CUSPARSE_DIAG_TYPE_UNIT
+    assert cusparseGetMatDiagType(A_CSR.descr) == CUSPARSE_DIAG_TYPE_UNIT
+
+    # test fill_mode property
+    assert A_CSR.fill_mode == CUSPARSE_FILL_MODE_LOWER
+    A_CSR.fill_mode = CUSPARSE_FILL_MODE_UPPER
+    assert A_CSR.fill_mode == CUSPARSE_FILL_MODE_UPPER
+    assert cusparseGetMatFillMode(A_CSR.descr) == CUSPARSE_FILL_MODE_UPPER
+
+    # verify setting value outside the valid range raises an exception
+    def set_mat_type(A, t):
+        A_CSR.matrix_type = t
+    assert_raises(CUSPARSE_STATUS_INVALID_VALUE, set_mat_type, A_CSR, 100)
+
+    # test get nnz
+    assert A_CSR.nnz == n
+    assert A_CSR.getnnz() == n
+
+    # verify that nnz can't be set
+    def set_nnz(A, nnz):
+        A_CSR.nnz = nnz
+    assert_raises(AttributeError, set_nnz, A_CSR, 5)
+
+
+def test_CSR_todense():
+    n = 64
+    h = cusparseCreate()
+    dtype = np.float32
+    A = 2*np.eye(n)
+
+    # generate a CSR matrix from a dense numpy array
+    A_CSR = CSR.to_CSR(A.astype(dtype), h)
+
+    # convert cusparseCSR back to a dense matrix
+    A_dense = A_CSR.todense(to_cpu=False)
+    assert type(A_dense) == gpuarray.GPUArray
+    assert_equal(A_dense.get(), A)
+
+    A_dense = A_CSR.todense(to_cpu=True)
+    assert type(A_dense) == np.ndarray
+    assert_equal(A_dense, A)
+
+
+def test_CSR_mv():
+    n = 64
+    h = cusparseCreate()
+    A = 2*np.eye(n)
+
+    dtype = np.float32
+    x_cpu = np.ones((n, ), dtype=dtype)
+    for dtype in cusparse_dtypes:
+
+        # generate a CSR matrix from a dense numpy array
+        A_CSR = CSR.to_CSR(A.astype(dtype), h)
+        x = gpuarray.to_gpu(x_cpu.astype(dtype))
+
+        # test default operation
+        y = A_CSR.mv(x)
+        assert_almost_equal(y.get(), A.diagonal())
+        # transpose will be the same for this matrix
+        y = A_CSR.mv(x, transA=CUSPARSE_OPERATION_TRANSPOSE)
+        assert_almost_equal(y.get(), A.diagonal())
+
+        alpha = 5.0
+        y = A_CSR.mv(x, alpha=alpha)
+        assert_almost_equal(y.get(), alpha*A.diagonal())
+
+        # repeat with non-zero beta and initialize with previous y
+        beta = 2.5
+        y = A_CSR.mv(x, alpha=alpha, beta=beta, y=y)
+        assert_almost_equal(y.get(), (alpha+alpha*beta)*A.diagonal())
+
+
+def test_CSR_mm():
+    m = 64
+    n = 10
+    h = cusparseCreate()
+    A = 2*np.eye(m)
+
+    dtype = np.float32
+    B_cpu = np.ones((m, n), dtype=dtype, order='F')
+    for dtype in cusparse_dtypes:
+        A = A.astype(dtype)
+
+        # generate a CSR matrix from a dense numpy array
+        A_CSR = CSR.to_CSR(A, h)
+        B = gpuarray.to_gpu(B_cpu.astype(dtype))
+
+        # test default operation
+        C = A_CSR.mm(B)
+        assert_almost_equal(C.get(), np.dot(A, B_cpu))
+        # transpose will be the same for this matrix
+        C = A_CSR.mm(B_cpu, transA=CUSPARSE_OPERATION_TRANSPOSE)
+        assert_almost_equal(C.get(), np.dot(A.T, B_cpu))
+
+        alpha = 5.0
+        C = A_CSR.mm(B, alpha=alpha)
+        assert_almost_equal(C.get(), alpha*np.dot(A, B_cpu))
+
+        # repeat with non-zero beta and initialize with previous C
+        beta = 2.5
+        C = A_CSR.mm(B, alpha=alpha, beta=beta, C=C)
+        assert_almost_equal(C.get(), (alpha+alpha*beta)*np.dot(A, B_cpu))
+
+
+def test_CSR_mm2():
+    A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
+    n = 5
+    alpha = 2.0
+    h = cusparseCreate()
+    try:
+        for transB in trans_list[:-1]:
+            for transA in trans_list:
+                for dtype in cusparse_dtypes:
+                    m, k = A_cpu.shape
+                    if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
+                        if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
+                            B_cpu = np.ones((k, n), dtype=dtype, order='F')
+                            opB = B_cpu
+                        else:
+                            B_cpu = np.ones((n, k), dtype=dtype, order='F')
+                            opB = B_cpu.T
+                        opA = A_cpu
+                    else:
+                        if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
+                            B_cpu = np.ones((m, n), dtype=dtype, order='F')
+                            opB = B_cpu
+                        else:
+                            # cuSPARSE doesn't implement this case
+                            continue
+                        if transA == CUSPARSE_OPERATION_TRANSPOSE:
+                            opA = A_cpu.T
+                        else:
+                            opA = np.conj(A_cpu).T
+
+                    expected_result = alpha * np.dot(opA, opB)
+                    B = gpuarray.to_gpu(B_cpu)
+
+                    A_CSR = CSR.to_CSR(A_cpu.astype(dtype), h)
+
+                    # test mutliplication without passing in C
+                    beta = 0.0
+                    C = A_CSR.mm2(B, transA=transA, transB=transB, alpha=alpha,
+                                  beta=beta, to_cpu=False)
+                    assert_almost_equal(C.get(), expected_result)
+
+                    # repeat, but pass in previous y with beta = 1.0
+                    beta = 1.0
+                    C = A_CSR.mm2(B, transA=transA, transB=transB, alpha=alpha,
+                                  beta=beta, C=C, to_cpu=True)
+                    assert_almost_equal(C, (1.0+beta)*expected_result)
+
+    finally:
+        cusparseDestroy(h)

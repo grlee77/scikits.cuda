@@ -73,12 +73,11 @@ def dense_nnz(handle, descrA, A, dirA=CUSPARSE_DIRECTION_ROW, lda=None,
 
 
 def dense2csr(A, handle=None, descrA=None, lda=None, check_inputs=True):
-
-    # try moving list or numpy array to GPU
+    """ Convert dense matrix to CSR. """
     if not isinstance(A, pycuda.gpuarray.GPUArray):
+        # try moving list or numpy array to GPU
         A = np.asfortranarray(np.atleast_2d(A))
         A = gpuarray.to_gpu(A)
-
     if check_inputs:
         if not isinstance(A, pycuda.gpuarray.GPUArray):
             raise ValueError("A must be a pyCUDA gpuarray")
@@ -132,7 +131,7 @@ def dense2csr(A, handle=None, descrA=None, lda=None, check_inputs=True):
 
 def csr2dense(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, A=None,
               lda=None, check_inputs=True):
-
+    """ convert CSR matrix to dense """
     if check_inputs:
         if A is not None:
             if not isinstance(A, pycuda.gpuarray.GPUArray):
@@ -172,11 +171,117 @@ def csr2dense(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, A=None,
     return A
 
 
+def csr2coo(handle, csrRowPtr, nnz, m=None, cooRowInd=None,
+            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+    """ convert CSR to COO """
+    if check_inputs:
+        if cooRowInd is not None:
+            if not isinstance(cooRowInd, pycuda.gpuarray.GPUArray):
+                raise ValueError("cooRowInd must be a pyCUDA gpuarray")
+        if not isinstance(csrRowPtr, pycuda.gpuarray.GPUArray):
+            raise ValueError("csrRowPtr must be a pyCUDA gpuarraya")
+    m = csrRowPtr.size - 1
+    if cooRowInd is None:
+        cooRowInd = gpuarray.to_gpu(np.zeros((nnz, ), dtype=np.int32))
+    cusparseXcsr2coo(handle=handle, csrRowPtr=csrRowPtr, nnz=nnz, m=m,
+                     cooRowInd=cooRowInd, idxBase=idxBase)
+    return cooRowInd
+
+
+# define with alternate naming for convenience
+def csc2coo(handle, cscColPtr, nnz, m=None, cooColInd=None,
+            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+    """ convert CSC to COO """
+    cooColInd = csr2coo(handle=handle, csrRowPtr=cscColPtr, nnz=nnz, m=m,
+                        cooRowInd=cooColInd, idxBase=idxBase)
+    return cooColInd
+
+
+def coo2csr(handle, cooRowInd, m, nnz=None, csrRowPtr=None,
+            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+    """ convert COO to CSR """
+    if csrRowPtr:
+        if cooRowInd is not None:
+            if not isinstance(csrRowPtr, pycuda.gpuarray.GPUArray):
+                raise ValueError("csrRowPtr must be a pyCUDA gpuarray")
+        if not isinstance(cooRowInd, pycuda.gpuarray.GPUArray):
+            raise ValueError("cooRowInd must be a pyCUDA gpuarraya")
+    nnz = cooRowInd.size
+    if csrRowPtr is None:
+        csrRowPtr = gpuarray.to_gpu(np.zeros((m, ), dtype=np.int32))
+    cusparseXcoo2csr(handle, cooRowInd, nnz, m, csrRowPtr, idxBase)
+    return csrRowPtr
+
+
+# define with alternate naming for convenience
+def coo2csc(handle, cooColInd, m, nnz=None, cscColPtr=None,
+            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+    """ convert COO to CSC"""
+    cscColPtr = coo2csr(handle=handle, cooRowInd=cooColInd, m=m, nnz=nnz,
+                        csrRowPtr=cscColPtr, idxBase=idxBase)
+    return cscColPtr
+
+
+def csr2csc(handle, m, n, csrVal, csrRowPtr, csrColInd, nnz=None, cscVal=None,
+            cscColPtr=None, cscRowInd=None, A=None,
+            copyValues=CUSPARSE_ACTION_NUMERIC,
+            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+    """ convert CSR to CSC """
+    if check_inputs:
+        if (cscVal is not None) or (cscColPtr is not None) or \
+           (cscRowInd is not None):
+            for arr in [cscVal, cscColPtr, csrRowInd]:
+                if not isinstance(arr, pycuda.gpuarray.GPUArray):
+                    raise ValueError("csc* inputs must all be pyCUDA gpuarrays"
+                                     " or None")
+        if cusparseGetMatType(descrA) != CUSPARSE_MATRIX_TYPE_GENERAL:
+            raise ValueError("Only general matrix type supported")
+        for arr in [csrVal, csrRowPtr, csrColInd]:
+            if not isinstance(arr, pycuda.gpuarray.GPUArray):
+                raise ValueError("csr* inputs must be a pyCUDA gpuarrays")
+        if (csrRowPtrA.size != m + 1):
+            raise ValueError("A: inconsistent size")
+    dtype = csrVal.dtype
+    if cscVal is None:
+        cscVal = gpuarray.to_gpu(np.zeros((nnz, ), dtype=dtype))
+        cscColPtr = gpuarray.to_gpu(np.zeros((n, ), dtype=np.int32))
+        cscRowInd = gpuarray.to_gpu(np.zeros((nnz, ), dtype=np.int32))
+    if dtype == np.float32:
+        fn = cusparseScsr2csc
+    elif dtype == np.float64:
+        fn = cusparseDcsr2csc
+    elif dtype == np.complex64:
+        fn = cusparseCcsr2csc
+    elif dtype == np.complex128:
+        fn = cusparseZcsr2csc
+    else:
+        raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
+    fn(handle, m, n, nnz, csrValA, csrRowPtrA, csrColIndA, cscVal, cscColPtr,
+       cscRowInd, lda)
+    return (cscVal, cscColPtr, cscRowInd)
+
+
+# also define csc2csr as a convenience
+def csc2csr(handle, m, n, cscVal, cscColPtr, cscRowInd, nnz=None, csrVal=None,
+            csrRowPtr=None, csrColInd=None,
+            copyValues=CUSPARSE_ACTION_NUMERIC,
+            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+    """ convert CSC to CSR """
+    csrVal, csrRowPtr, csrColInd = csr2csc(
+        handle, m, n, cscVal, cscColPtr, cscRowInd, nnz=nnz, cscVal=csrVal,
+        cscColPtr=csrRowPtr, cscRowInd=csrColInd, copyValues=copyValues,
+        idxBase=idxBase)
+    return csrVal, csrRowPtr, csrColInd
+
+
 def csrmv(handle, descrA, csrValA, csrRowPtrA, csrColIndA, m, n, x, nnz=None,
           transA=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0, beta=0.0,
           y=None, check_inputs=True):
-    """ higher level wrapper to cusparse<t>csrmv routines """
+    """ multiply a sparse matrix A, by dense vector x:
+    y = alpha * transA(A)*x + beta*y
 
+    higher level wrapper to cusparse<t>csrmv routines
+    """
     if check_inputs:
         if not isinstance(csrValA, pycuda.gpuarray.GPUArray):
             raise ValueError("csrValA must be a pyCUDA gpuarray")
@@ -189,25 +294,20 @@ def csrmv(handle, descrA, csrValA, csrRowPtrA, csrColIndA, m, n, x, nnz=None,
 
     if nnz is None:
         nnz = csrValA.size
-
     dtype = csrValA.dtype
     if y is None:
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
             y = gpuarray.zeros((m, ), dtype=dtype)
         else:
             y = gpuarray.zeros((n, ), dtype=dtype)
-
     # perform some basic sanity checks
     if check_inputs:
         if csrValA.size != nnz:
             raise ValueError("length of csrValA array must match nnz")
-
         if (x.dtype != dtype) or (y.dtype != dtype):
             raise ValueError("incompatible dtypes")
-
         if csrRowPtrA.size != (m+1):
             raise ValueError("length of csrRowPtrA array must be m+1")
-
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
             if x.size != n:
                 raise ValueError("sizes of x, A incompatible")
@@ -218,7 +318,6 @@ def csrmv(handle, descrA, csrValA, csrRowPtrA, csrColIndA, m, n, x, nnz=None,
                 raise ValueError("sizes of x, A incompatible")
             if y.size != n:
                 raise ValueError("sizes of y, A incompatible")
-
     if dtype == np.float32:
         fn = cusparseScsrmv
     elif dtype == np.float64:
@@ -237,8 +336,11 @@ def csrmv(handle, descrA, csrValA, csrRowPtrA, csrColIndA, m, n, x, nnz=None,
 def csrmm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
           nnz=None, transA=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
           beta=0.0, ldb=None, ldc=None, check_inputs=True):
-    """ higher level wrapper to cusparse<t>csrmm routines """
+    """ multiply a sparse matrix, A, by dense matrix B:
+    C = alpha * transA(A) * B + beta * C.
 
+    higher level wrapper to cusparse<t>csrmm routines
+    """
     if check_inputs:
         for item in [csrValA, csrRowPtrA, csrColIndA, B]:
             if not isinstance(item, pycuda.gpuarray.GPUArray):
@@ -251,7 +353,6 @@ def csrmm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
             raise ValueError("Dense matrix B must be in column-major order")
 
     dtype = csrValA.dtype
-
     if C is None:
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
             ldc = m
@@ -260,13 +361,10 @@ def csrmm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
         C = gpuarray.zeros((ldc, n), dtype=dtype, order='F')
     elif not C.flags.f_contiguous:
         raise ValueError("Dense matrix C must be in column-major order")
-
     if nnz is None:
         nnz = csrValA.size
-
     if ldb is None:
         ldb = B.shape[0]
-
     if ldc is None:
         ldc = C.shape[0]
 
@@ -274,29 +372,22 @@ def csrmm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
     if check_inputs:
         if csrValA.size != nnz:
             raise ValueError("length of csrValA array must match nnz")
-
         if (B.dtype != dtype) or (C.dtype != dtype):
             raise ValueError("A, B, C must share a common dtype")
-
         if ldb < B.shape[0]:
             raise ValueError("ldb invalid for matrix B")
-
         if ldc < C.shape[0]:
             raise ValueError("ldc invalid for matrix C")
-
         if (C.shape[1] != n) or (B.shape[1] != n):
             raise ValueError("bad shape for B or C")
-
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
             if (ldb != k) or (ldc != m):
                 raise ValueError("size of A incompatible with B or C")
         else:
             if (ldb != m) or (ldc != k):
                 raise ValueError("size of A incompatible with B or C")
-
         if csrRowPtrA.size != m+1:
             raise ValueError("length of csrRowPtrA invalid")
-
     if dtype == np.float32:
         fn = cusparseScsrmm
     elif dtype == np.float64:
@@ -316,8 +407,10 @@ def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
            nnz=None, transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
            transB=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
            beta=0.0, ldb=None, ldc=None, check_inputs=True):
-    """ higher level wrapper to cusparse<t>csrmm routines """
+    """ multiply two sparse matrices:  C = transA(A) * transB(B)
 
+    higher level wrapper to cusparse<t>csrmm2 routines.
+    """
     if check_inputs:
         for item in [csrValA, csrRowPtrA, csrColIndA, B]:
             if not isinstance(item, pycuda.gpuarray.GPUArray):
@@ -335,11 +428,10 @@ def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
 
         if (transB == CUSPARSE_OPERATION_TRANSPOSE) and \
            (transA != CUSPARSE_OPERATION_NON_TRANSPOSE):
-               raise ValueError("if B is transposed, only A non-transpose"
-                                "is supported")
+            raise ValueError("if B is transposed, only A non-transpose is "
+                             "supported")
 
     dtype = csrValA.dtype
-
     if C is None:
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
             ldc = m
@@ -348,13 +440,10 @@ def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
         C = gpuarray.zeros((ldc, n), dtype=dtype, order='F')
     elif not C.flags.f_contiguous:
         raise ValueError("Dense matrix C must be in column-major order")
-
     if nnz is None:
         nnz = csrValA.size
-
     if ldb is None:
         ldb = B.shape[0]
-
     if ldc is None:
         ldc = C.shape[0]
 
@@ -362,20 +451,16 @@ def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
     if check_inputs:
         if csrValA.size != nnz:
             raise ValueError("length of csrValA array must match nnz")
-
         if (B.dtype != dtype) or (C.dtype != dtype):
             raise ValueError("A, B, C must share a common dtype")
-
         if ldb < B.shape[0]:
             raise ValueError("ldb invalid for matrix B")
-
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
             ldOpA = m  # leading dimension for op(A)
             tdOpA = k  # trailing dimension for op(A)
         else:
             ldOpA = k
             tdOpA = m
-
         if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
             if B.shape[1] != n:
                 raise ValueError("B, n incompatible")
@@ -386,16 +471,12 @@ def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
                 raise ValueError("B, n incompatible")
             if (B.shape[1] != tdOpA):
                 raise ValueError("size of A incompatible with B")
-
         if (C.shape[1] != n):
             raise ValueError("bad shape for C")
-
         if (ldc != ldOpA):
             raise ValueError("size of A incompatible with C")
-
         if csrRowPtrA.size != m+1:
             raise ValueError("length of csrRowPtrA invalid")
-
     if dtype == np.float32:
         fn = cusparseScsrmm2
     elif dtype == np.float64:
@@ -421,11 +502,9 @@ def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
 def _csrgeamNnz(handle, m, n, descrA, csrRowPtrA, csrColIndA, descrB,
                 csrRowPtrB, csrColIndB, descrC=None, csrRowPtrC=None,
                 nnzA=None, nnzB=None, check_inputs=True):
-    """ higher level wrapper to cusparseXcsrgemmNnz.
+    """ support routine for csrgeam
 
-    Note
-    ----
-    transA(A) is shape m x k.  transB(B) is shape k x n.  C is shape m x n
+    higher level wrapper to cusparseXcsrgeamNnz.
     """
     if check_inputs:
         for array in [csrRowPtrA, csrColIndA, csrRowPtrB, csrColIndB]:
@@ -445,7 +524,6 @@ def _csrgeamNnz(handle, m, n, descrA, csrRowPtrA, csrColIndA, descrB,
         nnzA = csrColIndA.size
     if nnzB is None:
         nnzB = csrColIndB.size
-
     if descrC is None:
         return_descrC = True
         descrC = cusparseCreateMatDescr()
@@ -454,7 +532,6 @@ def _csrgeamNnz(handle, m, n, descrA, csrRowPtrA, csrColIndA, descrB,
         return_descrC = False
     if csrRowPtrC is None:
         csrRowPtrC = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
-
     nnzTotalDevHostPtr = ffi.new('int *', 0)
 
     # perform some basic sanity checks
@@ -481,22 +558,8 @@ def _csrgeamNnz(handle, m, n, descrA, csrRowPtrA, csrColIndA, descrB,
 def csrgeam(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
             csrValB, csrRowPtrB, csrColIndB, alpha=1.0, beta=0.0, nnzA=None,
             nnzB=None,  check_inputs=True):
-    """ higher level wrapper to cusparse<t>csrgemm routines.
-
-    Note
-    ----
-    transA(A) is shape m x k.  transB(B) is shape k x n.  C is shape m x n
-
-    if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
-        m, k = A.shape
-    else:
-        k, m = A.shape
-
-    if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
-        k, n = B.shape
-    else:
-        n, k = B.shape
-
+    """ add two sparse matrices:  C = alpha*A + beta*B.
+    higher level wrapper to cusparse<t>csrgemm routines.
     """
     if check_inputs:
         for array in [csrValA, csrRowPtrA, csrColIndA, csrValB, csrRowPtrB,
@@ -512,7 +575,6 @@ def csrgeam(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
         nnzA = csrValA.size
     if nnzB is None:
         nnzB = csrValB.size
-
     dtype = csrValA.dtype
 
     # perform some basic sanity checks
@@ -523,9 +585,6 @@ def csrgeam(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
             raise ValueError("length of csrValB array must match nnzB")
         if (dtype != csrValB.dtype):
             raise ValueError("incompatible dtypes")
-
-    # perform some basic sanity checks
-    if check_inputs:
         if csrRowPtrA.size != m + 1:
             raise ValueError("bad csrRowPtrA size")
         if csrRowPtrB.size != m + 1:
@@ -544,7 +603,6 @@ def csrgeam(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
     # allocated rest of C based on nnzC
     csrValC = gpuarray.to_gpu(np.zeros((nnzC, ), dtype=dtype))
     csrColIndC = gpuarray.to_gpu(np.zeros((nnzC, ), dtype=np.int32))
-
     if dtype == np.float32:
         fn = cusparseScsrgeam
     elif dtype == np.float64:
@@ -568,11 +626,9 @@ def _csrgemmNnz(handle, m, n, k, descrA, csrRowPtrA, csrColIndA, descrB,
                 transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
                 transB=CUSPARSE_OPERATION_NON_TRANSPOSE,
                 check_inputs=True):
-    """ higher level wrapper to cusparseXcsrgemmNnz.
+    """ support routine for csrgemm.
 
-    Note
-    ----
-    transA(A) is shape m x k.  transB(B) is shape k x n.  C is shape m x n
+    higher level wrapper to cusparseXcsrgemmNnz.
     """
     if check_inputs:
         for array in [csrRowPtrA, csrColIndA, csrRowPtrB, csrColIndB]:
@@ -591,16 +647,14 @@ def _csrgemmNnz(handle, m, n, k, descrA, csrRowPtrA, csrColIndA, descrB,
         nnzA = csrColIndA.size
     if nnzB is None:
         nnzB = csrColIndB.size
-
     if descrC is None:
-        return_descrC  = True
+        return_descrC = True
         descrC = cusparseCreateMatDescr()
         cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL)
     else:
         return_descrC = False
     if csrRowPtrC is None:
         csrRowPtrC = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
-
     nnzTotalDevHostPtr = ffi.new('int *', 0)
 
     # perform some basic sanity checks
@@ -637,7 +691,8 @@ def csrgemm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
             transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
             transB=CUSPARSE_OPERATION_NON_TRANSPOSE,
             check_inputs=True):
-    """ higher level wrapper to cusparse<t>csrgemm routines.
+    """ multiply two sparse matrices:  C = transA(A) * transB(B)
+    higher level wrapper to cusparse<t>csrgemm routines.
 
     Note
     ----
@@ -664,11 +719,11 @@ def csrgemm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
             raise ValueError("Only general matrix type supported")
         if cusparseGetMatType(descrB) != CUSPARSE_MATRIX_TYPE_GENERAL:
             raise ValueError("Only general matrix type supported")
+
     if nnzA is None:
         nnzA = csrValA.size
     if nnzB is None:
         nnzB = csrValB.size
-
     dtype = csrValA.dtype
 
     # perform some basic sanity checks
@@ -677,12 +732,8 @@ def csrgemm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
             raise ValueError("length of csrValA array must match nnzA")
         if csrValB.size != nnzB:
             raise ValueError("length of csrValB array must match nnzB")
-
         if (dtype != csrValB.dtype):
             raise ValueError("incompatible dtypes")
-
-    # perform some basic sanity checks
-    if check_inputs:
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
             ptrA_size = m + 1
         else:
@@ -729,6 +780,7 @@ def csrgemm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, descrB,
 
 
 class CSR(object):
+    """ cuSPARSE CSR (compressed sparse row) matrix object """
     def __init__(self, handle, descr, csrVal, csrRowPtr, csrColInd, shape):
         self.handle = handle
         self.descr = descr
@@ -751,6 +803,8 @@ class CSR(object):
     # alternative constructor from dense ndarray, gpuarray or cuSPARSE matrix
     @classmethod
     def to_CSR(cls, A, handle):
+        """ convert dense any scipy.sparse matrix formats to cuSPARSE CSR.
+        """
         if has_scipy and isinstance(A, scipy.sparse.spmatrix):
             """Convert scipy.sparse CSR, COO, BSR, etc to cuSPARSE CSR"""
             # converting BSR, COO, etc to CSR
@@ -764,8 +818,7 @@ class CSR(object):
             cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL)
             cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO)
         else:
-            """Takes dense numpy array or pyCUDA gpuarray and returns in CSR
-            format"""
+            """Take dense numpy array or pyCUDA gpuarray and convert to CSR """
             if not isinstance(A, pycuda.gpuarray.GPUArray):
                 A = np.asfortranarray(np.atleast_2d(A))
                 A = gpuarray.to_gpu(A)
@@ -784,7 +837,7 @@ class CSR(object):
 
     @property
     def matrix_type(self):
-        "matrix type"
+        """ matrix type """
         if self.__matrix_type is None:
             return cusparseGetMatType(self.descr)
         else:
@@ -792,12 +845,12 @@ class CSR(object):
 
     @matrix_type.setter
     def matrix_type(self, matrix_type):
-        "matrix type"
+        """ matrix type """
         self.__matrix_type = cusparseSetMatType(self.descr, matrix_type)
 
     @property
     def index_base(self):
-        "matrix index base"
+        """ matrix index base """
         if self.__index_base is None:
             return cusparseGetMatIndexBase(self.descr)
         else:
@@ -805,12 +858,12 @@ class CSR(object):
 
     @index_base.setter
     def index_base(self, index_base):
-        "matrix index base"
+        """ matrix index base """
         self.__index_base = cusparseSetMatIndexBase(self.descr, index_base)
 
     @property
     def diag_type(self):
-        "matrix diag type"
+        """ matrix diag type """
         if self.__diag_type is None:
             return cusparseGetMatDiagType(self.descr)
         else:
@@ -818,12 +871,12 @@ class CSR(object):
 
     @diag_type.setter
     def diag_type(self, diag_type):
-        "matrix diag type"
+        """matrix diag type """
         self.__diag_type = cusparseSetMatDiagType(self.descr, diag_type)
 
     @property
     def fill_mode(self):
-        "matrix fill mode"
+        """matrix fill mode """
         if self.__fill_mode is None:
             return cusparseGetMatFillMode(self.descr)
         else:
@@ -831,24 +884,31 @@ class CSR(object):
 
     @fill_mode.setter
     def fill_mode(self, fill_mode):
-        "matrix fill mode"
+        """matrix fill mode """
         self.__fill_mode = cusparseSetMatFillMode(self.descr, fill_mode)
 
     @property
     def nnz(self):
+        """ number of non-zeros """
         return self.Val.size
 
+    # mirror the function name from scipy
     def getnnz(self):
-        """mirror the function name from scipy"""
+        """ return number of non-zeros"""
         return self.nnz
 
-    def todense(self, lda=None, to_cpu=False, autosync=True):
-        """ returns dense gpuarray A """
+    def todense(self, lda=None, to_cpu=False, handle=None, stream=None):
+        """ return dense gpuarray if to_cpu=False, numpy ndarray if to_cpu=True
+        """
         m, n = self.shape
         if lda is None:
             lda = m
         else:
             assert lda >= m
+        if handle is None:
+            handle = self.handle
+        if stream is not None:
+            cusparseSetStream(handle, stream.handle)
         A = csr2dense(self.handle, m, n, self.descr, self.Val, self.RowPtr,
                       self.ColInd, lda=lda)
         if autosync:
@@ -859,18 +919,20 @@ class CSR(object):
             return A
 
     def mv(self, x, transA=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
-           beta=0.0, y=None, check_inputs=True, to_cpu=False, handle=None,
-           autosync=True):
-        """ returns dense gpuarray A """
+           beta=0.0, y=None, check_inputs=True, to_cpu=False,
+           autosync=True, handle=None, stream=None):
+        """ multiplication by dense vector x:  y = alpha*transA(A)*x + beta*y.
+        """
         m, n = self.shape
 
-        if handle is None:
-            handle = self.handle
         # try moving list or numpy array to GPU
         if not isinstance(x, pycuda.gpuarray.GPUArray):
             x = np.atleast_1d(x)  # .astype(self.dtype)
             x = gpuarray.to_gpu(x)
-
+        if handle is None:
+            handle = self.handle
+        if stream is not None:
+            cusparseSetStream(handle, stream.handle)
         y = csrmv(handle, self.descr, self.Val, self.RowPtr, self.ColInd, m, n,
                   x, transA=transA, alpha=alpha, beta=beta, y=y,
                   check_inputs=check_inputs)
@@ -883,14 +945,19 @@ class CSR(object):
 
     def mm(self, B, transA=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
            beta=0.0, C=None, ldb=None, ldc=None, check_inputs=True,
-           to_cpu=False, autosync=True):
-        """ returns dense gpuarray C """
+           to_cpu=False, autosync=True, handle=None, stream=None):
+        """ multiplication by dense matrix B:  C = alpha*transA(A)*B + beta*C.
+        """
         m, k = self.shape
         # try moving list or numpy array to GPU
         if not isinstance(B, pycuda.gpuarray.GPUArray):
             B = np.atleast_2d(B)  # .astype(self.dtype)
             B = gpuarray.to_gpu(B)
         n = B.shape[1]
+        if handle is None:
+            handle = self.handle
+        if stream is not None:
+            cusparseSetStream(handle, stream.handle)
         C = csrmm(handle=self.handle, m=m, n=n, k=k, descrA=self.descr,
                   csrValA=self.Val, csrRowPtrA=self.RowPtr,
                   csrColIndA=self.ColInd,  B=B, C=C, transA=transA,
@@ -906,8 +973,10 @@ class CSR(object):
     def mm2(self, B, transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
             transB=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0, beta=0.0,
             C=None, ldb=None, ldc=None, check_inputs=True, to_cpu=False,
-            autosync=True):
-        """ returns dense gpuarray C """
+            autosync=True, handle=None, stream=None):
+        """ multiplication by dense matrix B:  C = alpha*transA(A)*B + beta*C.
+        version 2
+        """
         m, k = self.shape
         # try moving list or numpy array to GPU
         if not isinstance(B, pycuda.gpuarray.GPUArray):
@@ -917,6 +986,10 @@ class CSR(object):
             n = B.shape[1]
         else:
             n = B.shape[0]
+        if handle is None:
+            handle = self.handle
+        if stream is not None:
+            cusparseSetStream(handle, stream.handle)
         C = csrmm2(handle=self.handle, m=m, n=n, k=k, descrA=self.descr,
                    csrValA=self.Val, csrRowPtrA=self.RowPtr,
                    csrColIndA=self.ColInd, B=B, C=C, transA=transA,
@@ -929,14 +1002,19 @@ class CSR(object):
         else:
             return C
 
-    def geam(self, B, alpha=1.0, beta=1.0, check_inputs=True, autosync=True):
-        """ returns dense gpuarray C """
+    def geam(self, B, alpha=1.0, beta=1.0, check_inputs=True, autosync=True,
+             handle=None, stream=None):
+        """ addition of sparse matrix B:  C = alpha*A + beta*B """
         m, n = self.shape
         if not isinstance(B, CSR):
             # try converting B to cuSPARSE CSR
             B = CSR.to_CSR(B, handle=self.handle)
         if self.shape != B.shape:
             raise ValueError("Incompatible shapes")
+        if handle is None:
+            handle = self.handle
+        if stream is not None:
+            cusparseSetStream(handle, stream.handle)
         descrC, ValC, RowPtrC, ColIndC = csrgeam(
             handle=self.handle, m=m, n=n, descrA=self.descr, csrValA=self.Val,
             csrRowPtrA=self.RowPtr, csrColIndA=self.ColInd, descrB=B.descr,
@@ -951,8 +1029,8 @@ class CSR(object):
 
     def gemm(self, B, transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
              transB=CUSPARSE_OPERATION_NON_TRANSPOSE, check_inputs=True,
-             autosync=True):
-        """ returns dense gpuarray C """
+             autosync=True, handle=None, stream=None):
+        """ multiplication by sparse matrix B:  C = transA(A) * transB(B) """
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
             m, k = self.shape
         else:
@@ -964,6 +1042,10 @@ class CSR(object):
             n = B.shape[1]
         else:
             n = B.shape[0]
+        if handle is None:
+            handle = self.handle
+        if stream is not None:
+            cusparseSetStream(handle, stream.handle)
         descrC, ValC, RowPtrC, ColIndC = csrgemm(
             handle=self.handle, m=m, n=n, k=k, descrA=self.descr,
             csrValA=self.Val, csrRowPtrA=self.RowPtr, csrColIndA=self.ColInd,
@@ -977,7 +1059,7 @@ class CSR(object):
         return C
 
     def __del__(self):
-        # delete the matrix description object
+        """ cleanup descriptor upon object deletion """
         cusparseDestroyMatDescr(self.descr)
         # don't destroy the handle as other objects may be using it
 
@@ -995,5 +1077,5 @@ class CSR(object):
         rstr += "\tVal = {}\n".format(self.Val)
         return rstr
 
-# TODO: add to object:  cusparseSetStream(handle, stream)
+# TODO: add __mul__, etc. similar to scipy.sparse.base.spmatrix
 # TODO: add global default handle to scikits.cuda.misc?

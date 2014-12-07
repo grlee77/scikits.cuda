@@ -4,6 +4,7 @@ from __future__ import division, print_function
 import numpy as np
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
+import pycuda.driver as drv
 
 try:
     import scipy.sparse
@@ -841,7 +842,7 @@ class CSR(object):
         """mirror the function name from scipy"""
         return self.nnz
 
-    def todense(self, lda=None, to_cpu=False):
+    def todense(self, lda=None, to_cpu=False, autosync=True):
         """ returns dense gpuarray A """
         m, n = self.shape
         if lda is None:
@@ -850,25 +851,31 @@ class CSR(object):
             assert lda >= m
         A = csr2dense(self.handle, m, n, self.descr, self.Val, self.RowPtr,
                       self.ColInd, lda=lda)
+        if autosync:
+            drv.Context.synchronize()
         if to_cpu:
             return A.get()
         else:
             return A
 
     def mv(self, x, transA=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
-           beta=0.0, y=None, check_inputs=True, to_cpu=False):
+           beta=0.0, y=None, check_inputs=True, to_cpu=False, handle=None,
+           autosync=True):
         """ returns dense gpuarray A """
         m, n = self.shape
 
+        if handle is None:
+            handle = self.handle
         # try moving list or numpy array to GPU
         if not isinstance(x, pycuda.gpuarray.GPUArray):
             x = np.atleast_1d(x)  # .astype(self.dtype)
             x = gpuarray.to_gpu(x)
 
-        y = csrmv(self.handle, self.descr, self.Val, self.RowPtr,
-                  self.ColInd, m, n, x,
-                  transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
-                  alpha=alpha, beta=beta, y=y, check_inputs=check_inputs)
+        y = csrmv(handle, self.descr, self.Val, self.RowPtr, self.ColInd, m, n,
+                  x, transA=transA, alpha=alpha, beta=beta, y=y,
+                  check_inputs=check_inputs)
+        if autosync:
+            drv.Context.synchronize()
         if to_cpu:
             return y.get()
         else:
@@ -876,22 +883,21 @@ class CSR(object):
 
     def mm(self, B, transA=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0,
            beta=0.0, C=None, ldb=None, ldc=None, check_inputs=True,
-           to_cpu=False):
+           to_cpu=False, autosync=True):
         """ returns dense gpuarray C """
         m, k = self.shape
-
         # try moving list or numpy array to GPU
         if not isinstance(B, pycuda.gpuarray.GPUArray):
             B = np.atleast_2d(B)  # .astype(self.dtype)
             B = gpuarray.to_gpu(B)
-
         n = B.shape[1]
-
         C = csrmm(handle=self.handle, m=m, n=n, k=k, descrA=self.descr,
                   csrValA=self.Val, csrRowPtrA=self.RowPtr,
                   csrColIndA=self.ColInd,  B=B, C=C, transA=transA,
                   alpha=alpha, beta=beta, ldb=ldb, ldc=ldc,
                   check_inputs=check_inputs)
+        if autosync:
+            drv.Context.synchronize()
         if to_cpu:
             return C.get()
         else:
@@ -899,76 +905,73 @@ class CSR(object):
 
     def mm2(self, B, transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
             transB=CUSPARSE_OPERATION_NON_TRANSPOSE, alpha=1.0, beta=0.0,
-            C=None, ldb=None, ldc=None, check_inputs=True, to_cpu=False):
+            C=None, ldb=None, ldc=None, check_inputs=True, to_cpu=False,
+            autosync=True):
         """ returns dense gpuarray C """
         m, k = self.shape
-
         # try moving list or numpy array to GPU
         if not isinstance(B, pycuda.gpuarray.GPUArray):
             B = np.atleast_2d(B)  # .astype(self.dtype)
             B = gpuarray.to_gpu(B)
-
         if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
             n = B.shape[1]
         else:
             n = B.shape[0]
-
         C = csrmm2(handle=self.handle, m=m, n=n, k=k, descrA=self.descr,
                    csrValA=self.Val, csrRowPtrA=self.RowPtr,
                    csrColIndA=self.ColInd, B=B, C=C, transA=transA,
                    transB=transB, alpha=alpha, beta=beta, ldb=ldb, ldc=ldc,
                    check_inputs=check_inputs)
+        if autosync:
+            drv.Context.synchronize()
         if to_cpu:
             return C.get()
         else:
             return C
 
-    def geam(self, B, alpha=1.0, beta=1.0, check_inputs=True):
+    def geam(self, B, alpha=1.0, beta=1.0, check_inputs=True, autosync=True):
         """ returns dense gpuarray C """
         m, n = self.shape
-
         if not isinstance(B, CSR):
             # try converting B to cuSPARSE CSR
             B = CSR.to_CSR(B, handle=self.handle)
-
         if self.shape != B.shape:
             raise ValueError("Incompatible shapes")
-
         descrC, ValC, RowPtrC, ColIndC = csrgeam(
             handle=self.handle, m=m, n=n, descrA=self.descr, csrValA=self.Val,
             csrRowPtrA=self.RowPtr, csrColIndA=self.ColInd, descrB=B.descr,
             csrValB=B.Val, csrRowPtrB=B.RowPtr, csrColIndB=B.ColInd,
             alpha=alpha, beta=beta, nnzA=self.nnz, nnzB=B.nnz,
             check_inputs=True)
-
         C = CSR(self.handle, descr=descrC, csrVal=ValC, csrRowPtr=RowPtrC,
                 csrColInd=ColIndC, shape=self.shape)
+        if autosync:
+            drv.Context.synchronize()
         return C
 
     def gemm(self, B, transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
-             transB=CUSPARSE_OPERATION_NON_TRANSPOSE, check_inputs=True):
+             transB=CUSPARSE_OPERATION_NON_TRANSPOSE, check_inputs=True,
+             autosync=True):
         """ returns dense gpuarray C """
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:
             m, k = self.shape
         else:
             k, m = self.shape
-
         if not isinstance(B, CSR):
             # try converting B to cuSPARSE CSR
             B = CSR.to_CSR(B, handle=self.handle)
-
         if transB == CUSPARSE_OPERATION_NON_TRANSPOSE:
             n = B.shape[1]
         else:
             n = B.shape[0]
-
         descrC, ValC, RowPtrC, ColIndC = csrgemm(
             handle=self.handle, m=m, n=n, k=k, descrA=self.descr,
             csrValA=self.Val, csrRowPtrA=self.RowPtr, csrColIndA=self.ColInd,
             descrB=B.descr, csrValB=B.Val, csrRowPtrB=B.RowPtr,
             csrColIndB=B.ColInd, nnzA=self.nnz, nnzB=B.nnz, transA=transA,
             transB=transB, check_inputs=True)
-
+        if autosync:
+            drv.Context.synchronize()
         C = CSR(self.handle, descr=descrC, csrVal=ValC, csrRowPtr=RowPtrC,
                 csrColInd=ColIndC, shape=(m, n))
         return C
@@ -991,3 +994,6 @@ class CSR(object):
         rstr += "\tRowPtr = {}\n".format(self.RowPtr)
         rstr += "\tVal = {}\n".format(self.Val)
         return rstr
+
+# TODO: add to object:  cusparseSetStream(handle, stream)
+# TODO: add global default handle to scikits.cuda.misc?

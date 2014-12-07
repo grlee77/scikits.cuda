@@ -6,6 +6,7 @@ from numpy.testing import assert_raises, assert_equal, assert_almost_equal
 
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
+import pycuda.driver as drv
 
 import scipy.sparse  # TODO: refactor to remove this
 
@@ -33,6 +34,11 @@ def test_create_destroy_hyb():
     HybA = cusparseCreateHybMat()
     cusparseDestroyHybMat(HybA)
 
+def test_set_stream():
+    # this test currently fails (TypeError: initializer for ctype 'struct CUstream_st *' must be a cdata pointer, not int)
+    handle = cusparseCreate()
+    stream = drv.Stream()
+    cusparseSetStream(handle, stream.handle)
 
 def test_get_set_PointerMode():
     handle = cusparseCreate()

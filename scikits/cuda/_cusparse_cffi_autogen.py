@@ -350,7 +350,7 @@ def _build_body(func_name, arg_dict, return_type):
                         np.complex128(%s).tostring()\n" % (k, k)
             else:
                 body += "%s = ffi.new('%s', %s)\n" % (k, v, k)
-        elif is_ptr:
+        elif is_ptr or v == 'cudaStream_t':
             # case non-scalar pointer to appropriate type
             body += "%s = ffi.cast('%s', %s)\n" % (k, v, k)
         else:

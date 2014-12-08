@@ -155,11 +155,14 @@ def test_dense2csr_csr2dense():
 
 
 def test_dense2csc_csc2dense():
-    A = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
-    m, n = A.shape
+    # comparison to scipy ColPtr/RowInd currently known to fail
+    # is this a bug or a different coordinate convention?
+    A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]], order='F')
+    m, n = A_cpu.shape
     for dtype in cusparse_dtypes:
-        A = A.astype(dtype)
-        A_csc_scipy = scipy.sparse.csc_matrix(A)
+        A_cpu = A_cpu.astype(dtype)
+        A_csc_scipy = scipy.sparse.csc_matrix(A_cpu)
+        A = gpuarray.to_gpu(A_cpu)
         (handle, descrA, cscValA, cscColPtrA, cscRowIndA) = dense2csc(A)
         try:
             assert_equal(cscValA.get(), A_csc_scipy.data)
@@ -168,7 +171,7 @@ def test_dense2csc_csc2dense():
 
             A_dense = csc2dense(handle, m, n, descrA, cscValA, cscColPtrA,
                                 cscRowIndA)
-            assert_equal(A, A_dense.get())
+            assert_equal(A_cpu, A_dense.get())
         finally:
             # release handle, descrA that were generated within dense2csc
             cusparseDestroy(handle)
@@ -176,12 +179,12 @@ def test_dense2csc_csc2dense():
 
 
 def test_csr2csc_csc2csr():
-    A = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
-    m, n = A.shape
+    A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]], order='F')
+    m, n = A_cpu.shape
 
     for dtype in cusparse_dtypes:
-        A = gpuarray.to_gpu(A.astype(dtype))
-        A_csr_scipy = scipy.sparse.csr_matrix(A)
+        A = gpuarray.to_gpu(A_cpu.astype(dtype))
+        A_csr_scipy = scipy.sparse.csr_matrix(A_cpu)
         A_csc_scipy = A_csr_scipy.tocsc()
         (handle, descr, csrVal, csrRowPtr, csrColInd) = dense2csr(A)
 
@@ -206,34 +209,63 @@ def test_csr2csc_csc2csr():
             cusparseDestroyMatDescr(descr)
 
 
-def test_csr2coo_coo2csr_csc2coo_coo2csc():
-    A = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
-    m, n = A.shape
+def test_csr2coo_coo2csr(): #_csc2coo_coo2csc():
+    A_cpu = np.asarray([[1, 0, 0], [0, 2, 0], [3, 0, 4], [0, 0, 5]], order='F')
+    m, n = A_cpu.shape
 
     for dtype in cusparse_dtypes:
-        A = gpuarray.to_gpu(A.astype(dtype))
-        A_csr_scipy = scipy.sparse.csr_matrix(A)
-        A_csc_scipy = A_csr_scipy.tocsc()
-        A_coo_scipy = A_csr_scipy.tocoo()
+        A = gpuarray.to_gpu(A_cpu.astype(dtype))
+        (handle, descr, csrVal, csrRowPtr, csrColInd) = dense2csr(A)
+        try:
+            nnz = csrVal.size
+            cscVal, cscColPtr, cscRowInd = csr2csc(handle, m, n, csrVal,
+                                                   csrRowPtr, csrColInd)
+
+            cooRowInd = csr2coo(handle, csrRowPtr, nnz)
+
+            # couldn't compare to scipy due to different ordering, so check the
+            # values directly
+            vals = csrVal.get()
+            rows = cooRowInd.get()
+            cols = csrColInd.get()
+            for idx in range(nnz):
+                assert A_cpu[rows[idx], cols[idx]] == vals[idx]
+
+            # repeat for inverse operation
+            csrRowPtr_v2 = coo2csr(handle, cooRowInd, m)
+            assert_equal(csrRowPtr_v2.get(), csrRowPtr.get())
+
+
+        finally:
+            cusparseDestroy(handle)
+            cusparseDestroyMatDescr(descr)
+
+
+def test_csc2coo_coo2csc():
+    A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]], order='F')
+    m, n = A_cpu.shape
+
+    for dtype in cusparse_dtypes:
+        A = gpuarray.to_gpu(A_cpu.astype(dtype))
         (handle, descr, csrVal, csrRowPtr, csrColInd) = dense2csr(A)
 
         try:
             nnz = csrVal.size
-            # verify match to scipy
-            cooRowInd = csr2coo(handle, csrRowPtr, nnz)
-            assert_equal(cooRowInd.get(), A_coo_scipy.row)
 
-            # repeat for inverse operation
-            csrRowPtr = coo2csr(handle, m, cooRowInd)
-            assert_equal(csrRowPtr.get(), A_csr_scipy.indptr)
-
-            # verify match to scipy
+            cscVal, cscColPtr, cscRowInd = csr2csc(handle, m, n, csrVal,
+                                                   csrRowPtr, csrColInd)
             cooColInd = csc2coo(handle, cscColPtr, nnz)
-            assert_equal(cooColInd.get(), A_coo_scipy.col)
+            # couldn't compare to scipy due to different ordering, so check the
+            # values directly
+            vals = csrVal.get()
+            rows = cscRowInd.get()
+            cols = cooColInd.get()
+            for idx in range(nnz):
+                assert A_cpu[rows[idx], cols[idx]] == vals[idx]
 
             # repeat for inverse operation
-            cscColPtr = coo2csc(handle, n, cooColInd)
-            assert_equal(cscColPtr.get(), A_csc_scipy.indptr)
+            cscColPtr_v2 = coo2csc(handle, cooColInd, n)
+            assert_equal(cscColPtr_v2.get(), cscColPtr.get())
 
         finally:
             cusparseDestroy(handle)

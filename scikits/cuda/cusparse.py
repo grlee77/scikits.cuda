@@ -204,7 +204,7 @@ def dense2csc(A, handle=None, descrA=None, lda=None, check_inputs=True):
     nnzPerCol, nnz = dense_nnz(
         handle, descrA, A, dirA=CUSPARSE_DIRECTION_COLUMN, lda=lda)
 
-    cscColPtrA = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
+    cscColPtrA = gpuarray.to_gpu(np.zeros((n+1, ), dtype=np.int32))
     cscRowIndA = gpuarray.to_gpu(np.zeros((nnz, ), dtype=np.int32))
     cscValA = gpuarray.to_gpu(np.zeros((nnz, ), dtype=dtype))
     if dtype == np.float32:
@@ -218,8 +218,8 @@ def dense2csc(A, handle=None, descrA=None, lda=None, check_inputs=True):
     else:
         raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
 
-    fn(handle, m, n, descrA, A, lda, nnzPerCol, cscValA, cscColPtrA,
-       cscRowIndA)
+    fn(handle, m, n, descrA, A, lda, nnzPerCol, cscValA, cscRowIndA,
+       cscColPtrA)
     return (handle, descrA, cscValA, cscColPtrA, cscRowIndA)
 
 
@@ -236,10 +236,10 @@ def csc2dense(handle, m, n, descrA, cscValA, cscColPtrA, cscRowIndA, A=None,
             raise ValueError("Only general matrix type supported")
         if cusparseGetMatIndexBase(descrA) != CUSPARSE_INDEX_BASE_ZERO:
             raise ValueError("Only base 0 matrix supported")
-        for arr in [csrValA, csrRowPtrA, csrColIndA]:
+        for arr in [cscValA, cscColPtrA, cscRowIndA]:
             if not isinstance(arr, pycuda.gpuarray.GPUArray):
                 raise ValueError("csc* inputs must be a pyCUDA gpuarrays")
-        if (csrRowPtrA.size != m + 1):
+        if (cscColPtrA.size != n + 1):
             raise ValueError("A: inconsistent size")
 
     if lda is None:
@@ -259,12 +259,12 @@ def csc2dense(handle, m, n, descrA, cscValA, cscColPtrA, cscRowIndA, A=None,
     else:
         raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
 
-    fn(handle, m, n, descrA, cscValA, cscColPtrA, csrRowIndA, A, lda)
+    fn(handle, m, n, descrA, cscValA, cscRowIndA, cscColPtrA, A, lda)
     return A
 
 
 def csr2coo(handle, csrRowPtr, nnz, m=None, cooRowInd=None,
-            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+            idxBase=CUSPARSE_INDEX_BASE_ZERO, check_inputs=True):
     """ convert CSR to COO """
     if check_inputs:
         if cooRowInd is not None:
@@ -272,7 +272,8 @@ def csr2coo(handle, csrRowPtr, nnz, m=None, cooRowInd=None,
                 raise ValueError("cooRowInd must be a pyCUDA gpuarray")
         if not isinstance(csrRowPtr, pycuda.gpuarray.GPUArray):
             raise ValueError("csrRowPtr must be a pyCUDA gpuarraya")
-    m = csrRowPtr.size - 1
+    if m is None:
+        m = csrRowPtr.size - 1
     if cooRowInd is None:
         cooRowInd = gpuarray.to_gpu(np.zeros((nnz, ), dtype=np.int32))
     cusparseXcsr2coo(handle=handle, csrRowPtr=csrRowPtr, nnz=nnz, m=m,
@@ -281,43 +282,47 @@ def csr2coo(handle, csrRowPtr, nnz, m=None, cooRowInd=None,
 
 
 # define with alternate naming for convenience
-def csc2coo(handle, cscColPtr, nnz, n=None, cooColInd=None,
-            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+def csc2coo(handle, cscColPtr, nnz, m=None, cooColInd=None,
+            idxBase=CUSPARSE_INDEX_BASE_ZERO, check_inputs=True):
     """ convert CSC to COO """
+    # if m is None:
+    #     m = cooColPtr.size - 1
     cooColInd = csr2coo(handle=handle, csrRowPtr=cscColPtr, nnz=nnz, m=m,
-                        cooRowInd=cooColInd, idxBase=idxBase)
+                        cooRowInd=cooColInd, idxBase=idxBase,
+                        check_inputs=check_inputs)
     return cooColInd
 
 
 def coo2csr(handle, cooRowInd, m, nnz=None, csrRowPtr=None,
-            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+            idxBase=CUSPARSE_INDEX_BASE_ZERO, check_inputs=True):
     """ convert COO to CSR """
-    if csrRowPtr:
-        if cooRowInd is not None:
+    if check_inputs:
+        if csrRowPtr is not None:
             if not isinstance(csrRowPtr, pycuda.gpuarray.GPUArray):
                 raise ValueError("csrRowPtr must be a pyCUDA gpuarray")
         if not isinstance(cooRowInd, pycuda.gpuarray.GPUArray):
             raise ValueError("cooRowInd must be a pyCUDA gpuarraya")
     nnz = cooRowInd.size
     if csrRowPtr is None:
-        csrRowPtr = gpuarray.to_gpu(np.zeros((m, ), dtype=np.int32))
+        csrRowPtr = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
     cusparseXcoo2csr(handle, cooRowInd, nnz, m, csrRowPtr, idxBase)
     return csrRowPtr
 
 
 # define with alternate naming for convenience
 def coo2csc(handle, cooColInd, m, nnz=None, cscColPtr=None,
-            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+            idxBase=CUSPARSE_INDEX_BASE_ZERO, check_inputs=True):
     """ convert COO to CSC"""
     cscColPtr = coo2csr(handle=handle, cooRowInd=cooColInd, m=m, nnz=nnz,
-                        csrRowPtr=cscColPtr, idxBase=idxBase)
+                        csrRowPtr=cscColPtr, idxBase=idxBase,
+                        check_inputs=check_inputs)
     return cscColPtr
 
 
 def csr2csc(handle, m, n, csrVal, csrRowPtr, csrColInd, nnz=None, cscVal=None,
             cscColPtr=None, cscRowInd=None, A=None,
             copyValues=CUSPARSE_ACTION_NUMERIC,
-            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+            idxBase=CUSPARSE_INDEX_BASE_ZERO, check_inputs=True):
     """ convert CSR to CSC """
     if check_inputs:
         if (cscVal is not None) or (cscColPtr is not None) or \
@@ -326,17 +331,16 @@ def csr2csc(handle, m, n, csrVal, csrRowPtr, csrColInd, nnz=None, cscVal=None,
                 if not isinstance(arr, pycuda.gpuarray.GPUArray):
                     raise ValueError("csc* inputs must all be pyCUDA gpuarrays"
                                      " or None")
-        if cusparseGetMatType(descrA) != CUSPARSE_MATRIX_TYPE_GENERAL:
-            raise ValueError("Only general matrix type supported")
         for arr in [csrVal, csrRowPtr, csrColInd]:
             if not isinstance(arr, pycuda.gpuarray.GPUArray):
                 raise ValueError("csr* inputs must be a pyCUDA gpuarrays")
-        if (csrRowPtrA.size != m + 1):
+        if (csrRowPtr.size != m + 1):
             raise ValueError("A: inconsistent size")
     dtype = csrVal.dtype
+    nnz = csrVal.size
     if cscVal is None:
         cscVal = gpuarray.to_gpu(np.zeros((nnz, ), dtype=dtype))
-        cscColPtr = gpuarray.to_gpu(np.zeros((n, ), dtype=np.int32))
+        cscColPtr = gpuarray.to_gpu(np.zeros((n+1, ), dtype=np.int32))
         cscRowInd = gpuarray.to_gpu(np.zeros((nnz, ), dtype=np.int32))
     if dtype == np.float32:
         fn = cusparseScsr2csc
@@ -348,8 +352,8 @@ def csr2csc(handle, m, n, csrVal, csrRowPtr, csrColInd, nnz=None, cscVal=None,
         fn = cusparseZcsr2csc
     else:
         raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
-    fn(handle, m, n, nnz, csrValA, csrRowPtrA, csrColIndA, cscVal, cscColPtr,
-       cscRowInd, lda)
+    fn(handle, m, n, nnz, csrVal, csrRowPtr, csrColInd, cscVal, cscRowInd,
+       cscColPtr, copyValues, idxBase)
     return (cscVal, cscColPtr, cscRowInd)
 
 
@@ -357,12 +361,12 @@ def csr2csc(handle, m, n, csrVal, csrRowPtr, csrColInd, nnz=None, cscVal=None,
 def csc2csr(handle, m, n, cscVal, cscColPtr, cscRowInd, nnz=None, csrVal=None,
             csrRowPtr=None, csrColInd=None,
             copyValues=CUSPARSE_ACTION_NUMERIC,
-            idxBase=CUSPARSE_INDEX_BASE_ZERO):
+            idxBase=CUSPARSE_INDEX_BASE_ZERO, check_inputs=True):
     """ convert CSC to CSR """
     csrVal, csrRowPtr, csrColInd = csr2csc(
         handle, m, n, cscVal, cscColPtr, cscRowInd, nnz=nnz, cscVal=csrVal,
         cscColPtr=csrRowPtr, cscRowInd=csrColInd, copyValues=copyValues,
-        idxBase=idxBase)
+        idxBase=idxBase, check_inputs=check_inputs)
     return csrVal, csrRowPtr, csrColInd
 
 
@@ -989,7 +993,8 @@ class CSR(object):
         """ return number of non-zeros"""
         return self.nnz
 
-    def todense(self, lda=None, to_cpu=False, handle=None, stream=None):
+    def todense(self, lda=None, to_cpu=False, handle=None, stream=None,
+                autosync=True):
         """ return dense gpuarray if to_cpu=False, numpy ndarray if to_cpu=True
         """
         m, n = self.shape

@@ -67,7 +67,11 @@ def generate_cffi_cdef(
     """
     v2_header = os.path.join(cuda_include_path, 'cusparse_v2.h')
     if not os.path.exists(v2_header):
-        raise ValueError("header file not found in expected location")
+        # on old versions there was only cusparse.h
+        v2_header = os.path.join(cuda_include_path, 'cusparse.h')
+        if not os.path.exists(v2_header):
+            raise ValueError("cusparse header file not found in expected "
+                             "location.  Try defining CUDA_ROOT")
 
     with open(v2_header, 'r') as f:
         cusparse_hdr = f.readlines()
@@ -87,9 +91,12 @@ def generate_cffi_cdef(
             break
 
     # skip closing #if defined logic
-    for idx, line in enumerate(cusparse_hdr[::-1]):
-        if line.startswith('#if defined(__cplusplus)'):
-            end_line = -idx - 1
+    for idx, line in enumerate(cusparse_hdr[start_line:]):
+        if line.startswith('#if defined(__cplusplus)') or \
+           'Define the following symbols for the new API' in line:
+            # second match is to avoid CFFI compilation errror due to the final
+            # define statements in v4.1 through v5.5
+            end_line = start_line + idx
             break
 
     # define other data types needed by FFI
@@ -118,6 +125,13 @@ def generate_cffi_cdef(
     """
 
     cffi_cdef += ''.join(cusparse_hdr[start_line:end_line])
+
+
+    """
+    don't use the _v2 versions of the function names defined in CUDA v4.1
+    through v5.5
+    """
+    cffi_cdef = cffi_cdef.replace('_v2(', '(')
 
     if os.name == 'nt':  # Win
         cffi_cdef = cffi_cdef.replace('CUSPARSEAPI', '__stdcall')

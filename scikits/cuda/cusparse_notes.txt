@@ -1,0 +1,115 @@
+Python wrappers exist for all 330 individual functions in cuSPARSE v6.5.  These get automatically generated from the cusparse_v2.h/cusparse.h headers upon the first import of scikits.cuda.cusparse.  The code performing this autogeneration is within _cusparse_cffi.py & _cusparse_cffi_autogen.py
+cusparse.py contains higher level data-type agnostic wrappers to a subset of the functions I was interested in using in the near-term.  These are primarily CSR matrix-vector and matrix-matrix multiplication and some basic format conversions.
+
+Specifically the following have simplified interfeaces within cusparse.py
+
+Level2 functions:
+csrmv
+
+Level3 functions:
+csrmm
+csrmm2
+
+extra functions:
+csrgeam
+csrgemm
+
+conversions:
+csc2coo
+csc2dense
+csr2coo
+csr2csc
+csr2dense
+coo2csc
+coo2csr
+dense2csc
+dense2csr
+nnz
+
+There is also a CSR class that incorporates much of this functionality in an even simpler manner.
+
+
+
+If anyone is interested, the following functions are not currently wrapped at a higher level:
+
+higher level Level1 wrappers unimplemented:
+axpyi
+doti
+dotci
+gthr
+gthrz
+roti
+sctr
+
+
+higher level Level2 wrappers unimplemented:
+bsrmv
+bsrxmv
+bsrsv2_bufferSize
+bsrsv2_analysis
+bsrsv2_solve
+bsrsv2_zeroPivot
+csrsv_analysis
+csrsv_solve
+csrsv2_bufferSize
+csrsv2_analysis
+csrsv2_solve
+csrsv2_zeroPivot
+hybmv
+hybsv_analysis
+hybsv_solve
+
+
+higher level Level3 wrappers unimplemented:
+csrsm_analysis
+csrsm_solve
+bsrmm
+bsrsm2_bufferSize
+bsrsm2_analysis
+bsrsm2_solve
+bsrsm2_zeroPivot
+
+
+higher level conversion wrappers unimplemented:
+bsr2csr
+gebsr2gebsc_bufferSize
+gebsr2gebsc
+gebsr2gebsr_bufferSize
+gebsr2gebsr
+gebsr2csr
+csr2gebsr_bufferSize
+csr2gebsr
+csc2hyb
+csr2bsr
+csr2hyb
+dense2hyb
+hyb2csc
+hyb2csr
+hyb2dense
+
+higher level preconditioner wrappers unimplemented:
+csric0
+csric02_bufferSize
+csric02_analysis
+csric02
+csric02_zeroPivot
+bsrilu0
+bsrilu02_numericBoost
+bsrilu02_bufferSize
+bsrilu02_analysis
+bsrilu02
+bsrilu02_zeroPivot
+bsric0
+bsric02_bufferSize
+bsric02_analysis
+bsric02
+bsric02_zeroPivot
+bsrilu0
+bsrilu02_numericBoost
+bsrilu02_bufferSize
+bsrilu02_analysis
+bsrilu02
+bsrilu02_zeroPivot
+gtsv
+gtsv_nopivot
+gtsvStridedBatch

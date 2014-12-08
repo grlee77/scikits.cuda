@@ -125,7 +125,6 @@ def dense2csr(A, handle=None, descrA=None, lda=None, check_inputs=True):
 
     fn(handle, m, n, descrA, A, lda, nnzPerRow, csrValA, csrRowPtrA,
        csrColIndA)
-
     return (handle, descrA, csrValA, csrRowPtrA, csrColIndA)
 
 
@@ -151,7 +150,6 @@ def csr2dense(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, A=None,
     if lda is None:
         lda = m
     assert lda >= m
-
     dtype = csrValA.dtype
     A = gpuarray.to_gpu(np.zeros((m, n), dtype=dtype, order='F'))
 
@@ -167,7 +165,101 @@ def csr2dense(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, A=None,
         raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
 
     fn(handle, m, n, descrA, csrValA, csrRowPtrA, csrColIndA, A, lda)
+    return A
 
+
+def dense2csc(A, handle=None, descrA=None, lda=None, check_inputs=True):
+    """ Convert dense matrix to CSC. """
+    if not isinstance(A, pycuda.gpuarray.GPUArray):
+        # try moving list or numpy array to GPU
+        A = np.asfortranarray(np.atleast_2d(A))
+        A = gpuarray.to_gpu(A)
+    if check_inputs:
+        if not isinstance(A, pycuda.gpuarray.GPUArray):
+            raise ValueError("A must be a pyCUDA gpuarray")
+        if len(A.shape) != 2:
+            raise ValueError("A must be 2D")
+        if descrA is not None:
+            if cusparseGetMatType(descrA) != CUSPARSE_MATRIX_TYPE_GENERAL:
+                raise ValueError("Only general matrix type supported")
+        if not A.flags.f_contiguous:
+            raise ValueError("Dense matrix A must be in column-major order")
+
+    if lda is None:
+        lda = A.shape[0]
+    m, n = A.shape
+    assert lda >= m
+    dtype = A.dtype
+
+    if handle is None:
+        handle = cusparseCreate()
+        cusparseSetPointerMode(handle, CUSPARSE_POINTER_MODE_HOST)
+
+    if descrA is None:
+        descrA = cusparseCreateMatDescr()
+        cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_GENERAL)
+        cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO)
+        cusparseSetPointerMode(handle, CUSPARSE_POINTER_MODE_HOST)
+
+    nnzPerCol, nnz = dense_nnz(
+        handle, descrA, A, dirA=CUSPARSE_DIRECTION_COLUMN, lda=lda)
+
+    cscColPtrA = gpuarray.to_gpu(np.zeros((m+1, ), dtype=np.int32))
+    cscRowIndA = gpuarray.to_gpu(np.zeros((nnz, ), dtype=np.int32))
+    cscValA = gpuarray.to_gpu(np.zeros((nnz, ), dtype=dtype))
+    if dtype == np.float32:
+        fn = cusparseSdense2csc
+    elif dtype == np.float64:
+        fn = cusparseDdense2csc
+    elif dtype == np.complex64:
+        fn = cusparseCdense2csc
+    elif dtype == np.complex128:
+        fn = cusparseZdense2csc
+    else:
+        raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
+
+    fn(handle, m, n, descrA, A, lda, nnzPerCol, cscValA, cscColPtrA,
+       cscRowIndA)
+    return (handle, descrA, cscValA, cscColPtrA, cscRowIndA)
+
+
+def csc2dense(handle, m, n, descrA, cscValA, cscColPtrA, cscRowIndA, A=None,
+              lda=None, check_inputs=True):
+    """ convert CSC matrix to dense """
+    if check_inputs:
+        if A is not None:
+            if not isinstance(A, pycuda.gpuarray.GPUArray):
+                raise ValueError("A must be a pyCUDA gpuarray")
+            if len(A.shape) != 2:
+                raise ValueError("A must be 2D")
+        if cusparseGetMatType(descrA) != CUSPARSE_MATRIX_TYPE_GENERAL:
+            raise ValueError("Only general matrix type supported")
+        if cusparseGetMatIndexBase(descrA) != CUSPARSE_INDEX_BASE_ZERO:
+            raise ValueError("Only base 0 matrix supported")
+        for arr in [csrValA, csrRowPtrA, csrColIndA]:
+            if not isinstance(arr, pycuda.gpuarray.GPUArray):
+                raise ValueError("csc* inputs must be a pyCUDA gpuarrays")
+        if (csrRowPtrA.size != m + 1):
+            raise ValueError("A: inconsistent size")
+
+    if lda is None:
+        lda = m
+    assert lda >= m
+    dtype = cscValA.dtype
+    A = gpuarray.to_gpu(np.zeros((m, n), dtype=dtype, order='F'))
+
+    if dtype == np.float32:
+        fn = cusparseScsc2dense
+    elif dtype == np.float64:
+        fn = cusparseDcsc2dense
+    elif dtype == np.complex64:
+        fn = cusparseCcsc2dense
+    elif dtype == np.complex128:
+        fn = cusparseZcsc2dense
+    else:
+        raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
+
+    fn(handle, m, n, descrA, cscValA, cscColPtrA, csrRowIndA, A, lda)
     return A
 
 
@@ -189,7 +281,7 @@ def csr2coo(handle, csrRowPtr, nnz, m=None, cooRowInd=None,
 
 
 # define with alternate naming for convenience
-def csc2coo(handle, cscColPtr, nnz, m=None, cooColInd=None,
+def csc2coo(handle, cscColPtr, nnz, n=None, cooColInd=None,
             idxBase=CUSPARSE_INDEX_BASE_ZERO):
     """ convert CSC to COO """
     cooColInd = csr2coo(handle=handle, csrRowPtr=cscColPtr, nnz=nnz, m=m,

@@ -15,10 +15,6 @@ trans_list = [CUSPARSE_OPERATION_NON_TRANSPOSE,
               CUSPARSE_OPERATION_TRANSPOSE,
               CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE]
 
-toolkit_version = drv.get_version()
-toolkit_version_major = toolkit_version[0]
-toolkit_version_minor = toolkit_version[1]
-
 def test_context_create_destroy():
     handle = cusparseCreate()
     cusparseDestroy(handle)
@@ -35,8 +31,7 @@ def test_get_version():
 
 def test_create_destroy_hyb():
     # wrappers to functions added in CUDA Toolkit v5.5
-    if toolkit_version_major < 4 or (toolkit_version_major == 4 and \
-                                       toolkit_version_minor == 0):
+    if toolkit_version < (4, 1, 0):
         # skip for old CUDA versions
         return
     HybA = cusparseCreateHybMat()
@@ -52,8 +47,7 @@ def test_set_stream():
         cusparseDestroy(handle)
 
 def test_get_set_PointerMode():
-    if toolkit_version_major < 4 or (toolkit_version_major == 4 and \
-                                     toolkit_version_minor == 0):
+    if toolkit_version < (4, 1, 0):
         # skip for old CUDA versions
         return
     handle = cusparseCreate()
@@ -392,8 +386,7 @@ def test_csrmm():
 
 
 def test_csrmm2():
-    if toolkit_version_major < 5 or (toolkit_version_major == 5 and \
-                                   toolkit_version_minor < 5):
+    if toolkit_version < (5, 5, 0):
         # skip for old CUDA versions
         return
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
@@ -469,7 +462,7 @@ def test_csrmm2():
 
 
 def test_csrgeamNnz():
-    if toolkit_version_major < 5:
+    if toolkit_version < (5, 0, 0):
         # skip for old CUDA versions
         return
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
@@ -520,7 +513,7 @@ def test_csrgeamNnz():
 
 
 def test_csrgeam():
-    if toolkit_version_major < 5:
+    if toolkit_version < (5, 0, 0):
         # skip for old CUDA versions
         return
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
@@ -570,7 +563,7 @@ def test_csrgeam():
 
 
 def test_csrgemmNnz():
-    if toolkit_version_major < 5:
+    if toolkit_version < (5, 0, 0):
         # skip for old CUDA versions
         return
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
@@ -647,7 +640,7 @@ def test_csrgemmNnz():
 
 
 def test_csrgemm():
-    if toolkit_version_major < 5:
+    if toolkit_version < (5, 0, 0):
         # skip for old CUDA versions
         return
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
@@ -894,8 +887,7 @@ def test_CSR_mm():
 
 
 def test_CSR_mm2():
-    if toolkit_version_major < 5 or (toolkit_version_major == 5 and \
-                               toolkit_version_minor < 5):
+    if toolkit_version < (5, 5, 0):
         # skip for old CUDA versions
         return
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
@@ -949,7 +941,7 @@ def test_CSR_mm2():
 
 
 def test_CSR_geam():
-    if toolkit_version_major < 5:
+    if toolkit_version < (5, 0, 0):
         # skip for old CUDA versions
         return
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])
@@ -973,7 +965,7 @@ def test_CSR_geam():
 
 
 def test_CSR_gemm():
-    if toolkit_version_major < 5:
+    if toolkit_version < (5, 0, 0):
         # skip for old CUDA versions
         return
     A_cpu = np.asarray([[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 0, 3]])

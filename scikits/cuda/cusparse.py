@@ -13,8 +13,6 @@ except ImportError:
     has_scipy = False
 
 toolkit_version = drv.get_version()
-toolkit_version_major = toolkit_version[0]
-toolkit_version_minor = toolkit_version[1]
 
 """
 Python interface to cuSPARSE functions.
@@ -428,8 +426,7 @@ def csrmv(handle, descrA, csrValA, csrRowPtrA, csrColIndA, m, n, x, nnz=None,
         fn = cusparseZcsrmv
     else:
         raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
-    if toolkit_version_major > 4 or (toolkit_version_major == 4 and \
-                                 toolkit_version_minor >= 1):
+    if toolkit_version >= (4, 1, 0):
 
         fn(handle, transA, m, n, nnz, alpha, descrA, csrValA, csrRowPtrA,
            csrColIndA, x, beta, y)
@@ -505,8 +502,7 @@ def csrmm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
         fn = cusparseZcsrmm
     else:
         raise ValueError("unsupported sparse matrix dtype: %s" % dtype)
-    if toolkit_version_major > 4 or (toolkit_version_major == 4 and \
-                                 toolkit_version_minor >= 1):
+    if toolkit_version >= (4, 1, 0):
         fn(handle, transA, m, n, k, nnz, alpha, descrA, csrValA, csrRowPtrA,
            csrColIndA, B, ldb, beta, C, ldc)
     else:
@@ -515,8 +511,7 @@ def csrmm(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B, C=None,
     return C
 
 
-if toolkit_version_major > 5 or (toolkit_version_major == 5 and \
-                                 toolkit_version_minor >= 5):
+if toolkit_version >= (5, 5, 0):
 
     def csrmm2(handle, m, n, k, descrA, csrValA, csrRowPtrA, csrColIndA, B,
                C=None, nnz=None, transA=CUSPARSE_OPERATION_NON_TRANSPOSE,
@@ -614,7 +609,7 @@ if toolkit_version_major > 5 or (toolkit_version_major == 5 and \
         return C
 
 
-if toolkit_version_major >= 5:
+if toolkit_version >= (5, 0, 0):
     def _csrgeamNnz(handle, m, n, descrA, csrRowPtrA, csrColIndA, descrB,
                     csrRowPtrB, csrColIndB, descrC=None, csrRowPtrC=None,
                     nnzA=None, nnzB=None, check_inputs=True):
@@ -1098,8 +1093,7 @@ class CSR(object):
         """ multiplication by dense matrix B:  C = alpha*transA(A)*B + beta*C.
         version 2
         """
-        if toolkit_version_major < 5 or (toolkit_version_major == 5  and \
-                                         toolkit_version_minor < 5):
+        if toolkit_version < (5, 5, 0):
             raise ImportError("mm2 not implemented prior to CUDA v5.5")
         m, k = self.shape
         # try moving list or numpy array to GPU
@@ -1129,7 +1123,7 @@ class CSR(object):
     def geam(self, B, alpha=1.0, beta=1.0, check_inputs=True, autosync=True,
              handle=None, stream=None):
         """ addition of sparse matrix B:  C = alpha*A + beta*B """
-        if toolkit_version_major < 5:
+        if toolkit_version < (5, 0, 0):
             raise ImportError("geam not implemented prior to CUDA v5.0")
         m, n = self.shape
         if not isinstance(B, CSR):
@@ -1157,7 +1151,7 @@ class CSR(object):
              transB=CUSPARSE_OPERATION_NON_TRANSPOSE, check_inputs=True,
              autosync=True, handle=None, stream=None):
         """ multiplication by sparse matrix B:  C = transA(A) * transB(B) """
-        if toolkit_version_major < 5:
+        if toolkit_version < (5, 0, 0):
             raise ImportError("gemm not implemented prior to CUDA v5.0")
 
         if transA == CUSPARSE_OPERATION_NON_TRANSPOSE:

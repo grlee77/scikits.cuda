@@ -14,6 +14,9 @@ except ImportError:
 
 toolkit_version = drv.get_version()
 
+if toolkit_version < (3, 2, 0):
+    raise ImportError("cuSPARSE not present prior to v3.2 of the CUDA toolkit")
+
 """
 Python interface to cuSPARSE functions.
 

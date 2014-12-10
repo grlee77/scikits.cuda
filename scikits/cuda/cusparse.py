@@ -8,9 +8,16 @@ import pycuda.driver as drv
 
 try:
     import scipy.sparse
+    from scipy.sparse.sputils import isscalarlike
     has_scipy = True
+
 except ImportError:
     has_scipy = False
+
+    # copy of isscalarlike from scipy.sparse.sputils
+    def isscalarlike(x):
+        """Is x either a scalar, an array scalar, or a 0-dim array?"""
+        return np.isscalar(x) or (isdense(x) and x.ndim == 0)
 
 toolkit_version = drv.get_version()
 
@@ -37,6 +44,16 @@ except Exception as e:
 # define higher level wrappers for common functions
 # will check dimensions, autoset some variables and call the appriopriate
 # function based on the input dtype
+
+
+def copyMatDescr(descr):
+    """ create a new copy of Matrix Descriptor, descr """
+    descr_copy = cusparseCreateMatDescr()
+    cusparseSetMatType(descr_copy, cusparseGetMatType(descr))
+    cusparseSetMatIndexBase(descr_copy, cusparseGetMatIndexBase(descr))
+    cusparseSetMatDiagType(descr_copy, cusparseGetMatDiagType(descr))
+    cusparseSetMatFillMode(descr_copy, cusparseGetMatFillMode(descr))
+    return descr_copy
 
 
 def dense_nnz(handle, descrA, A, dirA=CUSPARSE_DIRECTION_ROW, lda=None,
@@ -896,7 +913,6 @@ if toolkit_version >= (5, 0, 0):
            csrValC, csrRowPtrC, csrColIndC)
         return (descrC, csrValC, csrRowPtrC, csrColIndC)
 
-
 class CSR(object):
     """ cuSPARSE CSR (compressed sparse row) matrix object """
     def __init__(self, handle, descr, csrVal, csrRowPtr, csrColInd, shape):
@@ -1183,6 +1199,125 @@ class CSR(object):
         C = CSR(self.handle, descr=descrC, csrVal=ValC, csrRowPtr=RowPtrC,
                 csrColInd=ColIndC, shape=(m, n))
         return C
+
+    """
+    start of: subset of methods in scipy.sparse.compressed._cs_matrix
+    """
+    @property
+    def A(self):
+        "The transpose operator."
+        return self.todense()
+
+    @property
+    def T(self):
+        "The transpose operator."
+        return self.transpose()
+
+    @property
+    def H(self):
+        "The adjoint operator."
+        return self.getH()
+
+    @property
+    def real(self):
+        "The transpose operator."
+        return self._real()
+
+    @property
+    def imag(self):
+        "The transpose operator."
+        return self._imag()
+
+    @property
+    def size(self):
+        "The adjoint operator."
+        return self.getnnz()
+
+    def transpose(self):
+        m, n = self.shape
+        # use csr2csc to perform the transpose
+        cscVal, cscColPtr, cscRowInd = csr2csc(
+            self.handle, m, n, self.Val, self.RowPtr, self.ColInd, self.nnz)
+        drv.Context.synchronize()
+        return CSR(self.handle, copyMatDescr(self.descr), cscVal, cscColPtr,
+                   cscRowInd, self.shape)
+
+    def getH(self):
+        return self.transpose().conj()
+
+    def conjugate(self):
+        return self.conj()
+
+    # implement _with_data similar to scipy.sparse.data._data_matrix
+    def _with_data(self, data, copy=True):
+        """Returns a matrix with the same sparsity structure as self,
+        but with different data.  By default the structure arrays
+        (i.e. .indptr and .indices) are copied.
+        """
+        if copy:
+            return self.__class__(self.handle, copyMatDescr(self.descr), data,
+                                  self.RowPtr.copy(), self.ColInd.copy(),
+                                  self.shape)
+        else:
+            return self.__class__(self.handle, self.descr, data,
+                                  self.RowPtr, self.ColInd,
+                                  self.shape)
+
+    """
+    end of: subset of methods in scipy.sparse.compressed._cs_matrix
+    """
+
+    """
+    start of: subset of methods in scipy.sparse.data._data_matrix
+    """
+    def conj(self):
+        return self._with_data(self.data.conj())
+        # return CSR(self.handle, self.descr, self.Val.conj(), self.RowPtr,
+        #            self.ColInd, self.shape)
+
+    def _real(self):
+        return self._with_data(self.data.real)
+        # return CSR(self.handle, self.descr, self.Val.real, self.RowPtr,
+        #            self.ColInd, self.shape)
+
+    def _imag(self):
+        return self._with_data(self.data.imag)
+        # return CSR(self.handle, self.descr, self.Val.imag, self.RowPtr,
+        #            self.ColInd, self.shape)
+
+    def __abs__(self):
+        return self._with_data(abs(self.data))
+
+    def __neg__(self):
+        return self._with_data(abs(self.data))
+
+    def __imul__(self, other):  # self *= other
+        if isscalarlike(other):
+            self.data *= other
+            return self
+        else:
+            return NotImplemented
+
+    def __itruediv__(self, other):  # self /= other
+        if isscalarlike(other):
+            recip = 1.0 / other
+            self.data *= recip
+            return self
+        else:
+            return NotImplemented
+
+    def astype(self, t):
+        return self._with_data(self.data.astype(t))
+
+    def copy(self):
+        return self._with_data(self.data.copy(), copy=True)
+
+    def _mul_scalar(self, other):
+        return self._with_data(self.data * other)
+
+    """
+    end of: subset of methods in scipy.sparse.data._data_matrix
+    """
 
     def __del__(self):
         """ cleanup descriptor upon object deletion """

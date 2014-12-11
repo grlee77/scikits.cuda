@@ -937,17 +937,30 @@ class CSR(object):
     # alternative constructor from dense ndarray, gpuarray or cuSPARSE matrix
     @classmethod
     def to_CSR(cls, A, handle):
-        """ convert dense any scipy.sparse matrix formats to cuSPARSE CSR.
+        """ convert dense numpy or gpuarray matrices as well as any
+        scipy.sparse matrix formats to cuSPARSE CSR.
         """
         if has_scipy and isinstance(A, scipy.sparse.spmatrix):
             """Convert scipy.sparse CSR, COO, BSR, etc to cuSPARSE CSR"""
             # converting BSR, COO, etc to CSR
+            if A.dtype.char not in ['f', 'd', 'F', 'D']:
+                raise ValueError("unsupported numpy dtype {}".format(A.dtype))
+
             if not isinstance(A, scipy.sparse.csr_matrix):
                 A = A.tocsr()
 
-            csrRowPtr = gpuarray.to_gpu(A.indptr.astype(np.int32))
-            csrColInd = gpuarray.to_gpu(A.indices.astype(np.int32))
-            csrVal = gpuarray.to_gpu(A.data.astype(A.dtype))
+            # avoid .astype() calls if possible for speed
+            if A.indptr.dtype != np.int32:
+                csrRowPtr = gpuarray.to_gpu(A.indptr.astype(np.int32))
+            else:
+                csrRowPtr = gpuarray.to_gpu(A.indptr)
+
+            if A.indices.dtype != np.int32:
+                csrColInd = gpuarray.to_gpu(A.indices.astype(np.int32))
+            else:
+                csrColInd = gpuarray.to_gpu(A.indices)
+
+            csrVal = gpuarray.to_gpu(A.data)
             descr = cusparseCreateMatDescr()
             cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL)
             cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO)
@@ -1030,6 +1043,14 @@ class CSR(object):
     def getnnz(self):
         """ return number of non-zeros"""
         return self.nnz
+
+    def tocsr_scipy(self):
+        """ return as scipy csr_matrix in host memory """
+        from scipy.sparse import csr_matrix
+        return csr_matrix((self.data.get(),
+                           self.indices.get(),
+                           self.indptr.get()),
+                          shape=self.shape)
 
     def todense(self, lda=None, to_cpu=False, handle=None, stream=None,
                 autosync=True):

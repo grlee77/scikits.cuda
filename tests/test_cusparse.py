@@ -872,6 +872,29 @@ def test_CSR_todense():
         cusparseDestroy(h)
 
 
+def test_CSR_tocsr_scipy():
+    n = 64
+    h = cusparseCreate()
+    try:
+        dtype = np.float32
+        A = 2*np.eye(n)
+
+        # generate a CSR matrix from a dense numpy array
+        A_CSR = CSR.to_CSR(A.astype(dtype), h)
+
+        # convert cusparseCSR back to a dense matrix
+        csr_scipy = A_CSR.tocsr_scipy()
+        # assert_equal(A_CSR.data.get(), csr_scipy.data)
+        # assert_equal(A_CSR.indices.get(), csr_scipy.indices)
+        # assert_equal(A_CSR.indptr.get(), csr_scipy.indptr)
+
+        assert_equal(csr_scipy.indptr, scipy.sparse.csr_matrix(A).indptr)
+        assert_equal(csr_scipy.indices, scipy.sparse.csr_matrix(A).indices)
+        assert_equal(csr_scipy.data, scipy.sparse.csr_matrix(A).data)
+    finally:
+        cusparseDestroy(h)
+
+
 def test_CSR_mv():
     n = 64
     h = cusparseCreate()

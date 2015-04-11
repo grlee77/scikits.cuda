@@ -46,7 +46,8 @@ if not os.path.isdir(cuda_lib_path):
 
 
 def ffi_init(cffi_cdef, headers=[], libraries=[],
-             include_dirs=[cuda_include_path], library_dirs=[cuda_lib_path]):
+             include_dirs=[cuda_include_path], library_dirs=[cuda_lib_path],
+             **kwargs):
     """ initialize FFI and FFILibrary objects using cffi
 
     Parameters
@@ -79,7 +80,9 @@ def ffi_init(cffi_cdef, headers=[], libraries=[],
 
     ffi_lib = ffi.verify(__verify_scr, libraries=libraries,
                          include_dirs=include_dirs,
-                         library_dirs=library_dirs)
+                         library_dirs=library_dirs,
+                         **kwargs)
+
     return ffi, ffi_lib
 
 

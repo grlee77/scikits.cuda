@@ -160,8 +160,8 @@ def build_func_body(func_name, arg_dict, return_type):
                           'pBufferSizeInBytes',
                           'resultDevHostPtr']
 
-    is_creator = 'cusolverCreate' in func_name
-    is_getter = 'cusolverGet' in func_name
+    is_creator = 'Create' in func_name
+    is_getter = 'Get' in func_name
 
     if return_type == 'cusolverStatus_t' and not (is_creator or is_getter):
         is_return = False

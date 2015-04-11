@@ -5,6 +5,7 @@ from scikits.cuda.cusolver import *
 from scikits.cuda import cusolver
 cusolver.init()
 
+
 import numpy as np
 from numpy.testing import assert_raises, assert_equal, assert_almost_equal
 
@@ -14,12 +15,19 @@ import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
 
-cusparse_real_dtypes = [np.float32, np.float64]
-cusparse_complex_dtypes = [np.complex64, np.complex128]
-cusparse_dtypes = cusparse_real_dtypes + cusparse_complex_dtypes
+cusolver_real_dtypes = [np.float32, np.float64]
+cusolver_complex_dtypes = [np.complex64, np.complex128]
+cusolver_dtypes = cusolver_real_dtypes + cusolver_complex_dtypes
 
 
+def test_Dn_create_destroy():
+    handle = cusolverDnCreate()
+    cusolverDnDestroy(handle)
 
-# def test_context_create_destroy():
-#     handle = cusparseCreate()
-#     cusparseDestroy(handle)
+def test_Sp_create_destroy():
+    handle = cusolverSpCreate()
+    cusolverSpDestroy(handle)
+
+def test_Rf_create_destroy():
+    handle = cusolverRfCreate()
+    cusolverRfDestroy(handle)
